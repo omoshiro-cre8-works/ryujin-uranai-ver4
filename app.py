@@ -1,16 +1,13 @@
 import datetime
 import html
 import os
-from typing import Any
 
 import streamlit as st
 
 from config import (
-    APP_PASSPHRASE,
     APP_SUBTITLE,
     APP_TITLE,
     CATEGORY_OPTIONS,
-    GEMINI_API_KEY,
     GEMINI_MODEL,
     HOUR_OPTIONS,
     MAX_IMAGE_FILES,
@@ -19,6 +16,8 @@ from config import (
     MINUTE_OPTIONS,
     SHOW_DEBUG,
     TIME_ACCURACY_OPTIONS,
+    get_app_passphrase,
+    get_gemini_api_key,
 )
 from models.schemas import FortuneInput, PalmImageMeta
 from services.fortune_service import build_image_parts, call_gemini_fortune
@@ -41,6 +40,9 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
 
+    APP_PASSPHRASE = get_app_passphrase()
+    GEMINI_API_KEY = get_gemini_api_key()
+
     if "fortune_json" not in st.session_state:
         st.session_state.fortune_json = None
     if "user_name" not in st.session_state:
@@ -61,6 +63,10 @@ def main() -> None:
     st.write("DEBUG")
     st.write("APP_PASSPHRASE loaded:", bool(APP_PASSPHRASE))
     st.write("GEMINI_API_KEY loaded:", bool(GEMINI_API_KEY))
+    try:
+        st.write("secrets keys:", list(st.secrets.keys()))
+    except Exception:
+        st.write("secrets keys: []")
 
     if not APP_PASSPHRASE:
         st.error("合言葉が設定されていません。.env または Streamlit Secrets の APP_PASSPHRASE を確認してください。")
@@ -223,7 +229,6 @@ def main() -> None:
     render_form_gap(1)
 
     if st.button("🐉 龍神さまのお告げを聞く"):
-
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,

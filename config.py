@@ -7,9 +7,10 @@ load_dotenv()
 
 def get_secret(key: str, default: str = "") -> str:
     try:
-        value = st.secrets.get(key)
-        if value is not None and str(value).strip() != "":
-            return str(value)
+        if key in st.secrets:
+            value = st.secrets[key]
+            if value is not None and str(value).strip() != "":
+                return str(value)
     except Exception:
         pass
     return os.getenv(key, default)
@@ -18,8 +19,14 @@ def get_secret(key: str, default: str = "") -> str:
 APP_TITLE = os.getenv("APP_TITLE", "龍神さまのお告げ")
 APP_SUBTITLE = os.getenv("APP_SUBTITLE", "巫女が龍神さまの声を聞き、あなたの運命を紐解きます。")
 
-APP_PASSPHRASE = get_secret("APP_PASSPHRASE", "")
-GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
+
+def get_app_passphrase() -> str:
+    return get_secret("APP_PASSPHRASE", "")
+
+
+def get_gemini_api_key() -> str:
+    return get_secret("GEMINI_API_KEY", "")
+
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MIKO_IMAGE_PATH = os.getenv("MIKO_IMAGE_PATH", "miko.png")
