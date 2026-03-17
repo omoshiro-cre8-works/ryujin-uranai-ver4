@@ -1,0 +1,340 @@
+import datetime
+import io
+import os
+import re
+from typing import Any
+
+from reportlab.lib.colors import HexColor
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
+
+from config import APP_TITLE, MIKO_IMAGE_PATH, PDF_FONT_PATHS
+
+def register_japanese_font() -> str:
+    for font_path in PDF_FONT_PATHS:
+        if os.path.exists(font_path):
+            font_name = os.path.splitext(os.path.basename(font_path))[0]
+            pdfmetrics.registerFont(TTFont(font_name, font_path))
+            return font_name
+    return "Helvetica"
+
+
+def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
+    forbidden_line_start_chars = "、。，．）】』」〉》〕】"
+    preferred_break_chars = "。、】【』」"
+    short_tail_patterns = (
+        "す。", "ます。", "した。", "です。", "でした。", "た。", "る。", "う。", "い。",
+        "ますが、", "ですが、", "でしたが、", "ので、", "ため、", "でしょう。", "ました。",
+        "こと。", "もの。", "けて", "えて", "める", "らか", "実に", "利に"
+    )
+    lines: list[str] = []
+
+    def is_hiragana(ch: str) -> bool:
+        return "ぁ" <= ch <= "ゖ"
+
+    def is_kanji(ch: str) -> bool:
+        return "\u4e00" <= ch <= "\u9fff"
+
+    def looks_like_short_tail(fragment: str) -> bool:
+        fragment = fragment.strip()
+        if not fragment:
+            return False
+        if fragment in forbidden_line_start_chars:
+            return True
+        if len(fragment) <= 2:
+            return True
+        if len(fragment) <= 4 and fragment[-1] in forbidden_line_start_chars:
+            return True
+        return any(fragment.endswith(p) or fragment == p for p in short_tail_patterns)
+
+    def bad_boundary(left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+
+        # 行頭句読点は不可
+        if right[0] in forbidden_line_start_chars:
+            return True
+
+        # 漢字1字だけが次行に残る
+        if len(right) >= 1 and is_kanji(right[0]) and (len(right) == 1 or (len(right) >= 2 and is_hiragana(right[1]))):
+            return True
+
+        # ひらがな1〜2字だけが次行頭に残る
+        if len(right) >= 1 and is_hiragana(right[0]):
+            head = right[:2]
+            if len(right) <= 2 or all(is_hiragana(c) for c in head):
+                return True
+
+        # 漢字 + 送り仮名 の途中分断
+        if len(left) >= 1 and len(right) >= 1 and is_kanji(left[-1]) and is_hiragana(right[0]):
+            return True
+
+        # 語尾の途中分断
+        for size in (2, 3, 4, 5):
+            if len(right) >= size and right[:size] in short_tail_patterns:
+                return True
+
+        # 「読み取れま / す。」「向 / けて」型
+        if len(left) >= 1 and len(right) >= 1:
+            if is_hiragana(left[-1]) and is_hiragana(right[0]):
+                return True
+            if is_kanji(left[-1]) and len(right) >= 2 and all(is_hiragana(c) for c in right[:2]):
+                return True
+
+        return False
+
+    def choose_break_pos(paragraph: str, start_pos: int, limit: int) -> int:
+        end_pos = min(start_pos + limit, len(paragraph))
+        if end_pos >= len(paragraph):
+            return len(paragraph)
+
+        window = paragraph[start_pos:end_pos]
+
+        # まず文末・閉じ括弧で切れる位置を優先
+        for i in range(len(window) - 1, max(-1, len(window) - 12), -1):
+            if window[i] in preferred_break_chars:
+                pos = start_pos + i + 1
+                left = paragraph[start_pos:pos]
+                right = paragraph[pos:]
+                if not bad_boundary(left, right):
+                    return pos
+
+        # 次に読点で切れる位置を探す
+        for i in range(len(window) - 1, max(-1, len(window) - 10), -1):
+            if window[i] in "、，":
+                pos = start_pos + i + 1
+                left = paragraph[start_pos:pos]
+                right = paragraph[pos:]
+                if not bad_boundary(left, right):
+                    return pos
+
+        # 最後に、境界が悪ければ1〜3文字戻して自然な位置を探す
+        candidate = end_pos
+        for back in (0, 1, 2, 3):
+            pos = candidate - back
+            if pos <= start_pos + 1 or pos >= len(paragraph):
+                continue
+            left = paragraph[start_pos:pos]
+            right = paragraph[pos:]
+            if not bad_boundary(left, right):
+                return pos
+
+        return end_pos
+
+    def chunk_long_segment(segment: str, limit: int) -> list[str]:
+        result: list[str] = []
+        start_pos = 0
+        while start_pos < len(segment):
+            break_pos = choose_break_pos(segment, start_pos, limit)
+            current = segment[start_pos:break_pos]
+
+            # 次の文字が句読点や閉じ括弧なら、多少はみ出しても前行へ寄せる
+            while break_pos < len(segment) and segment[break_pos] in forbidden_line_start_chars and len(current) <= limit + 4:
+                current += segment[break_pos]
+                break_pos += 1
+
+            remaining = segment[break_pos:]
+            while remaining and looks_like_short_tail(remaining) and len(current) < limit + 3:
+                current += remaining[0]
+                break_pos += 1
+                remaining = segment[break_pos:]
+
+            result.append(current)
+            start_pos = break_pos
+        return result
+
+    def split_into_segments(paragraph: str) -> list[str]:
+        parts = re.findall(r'.+?(?:[。、】【』」]|[、，]|$)', paragraph)
+        return [p for p in (part.strip() for part in parts) if p]
+
+    def rebalance_lines(paragraph_lines: list[str]) -> list[str]:
+        if len(paragraph_lines) < 2:
+            return paragraph_lines
+
+        changed = True
+        while changed and len(paragraph_lines) >= 2:
+            changed = False
+
+            for idx in range(1, len(paragraph_lines)):
+                prev_line = paragraph_lines[idx - 1]
+                curr_line = paragraph_lines[idx]
+
+                if not curr_line:
+                    continue
+
+                # 句読点・閉じ括弧は、少しはみ出しても前行へ寄せる
+                while curr_line and curr_line[0] in forbidden_line_start_chars and len(prev_line) <= width + 4:
+                    prev_line += curr_line[0]
+                    curr_line = curr_line[1:]
+                    changed = True
+
+                # 行頭の短い終端片・語尾断片を前の行へ寄せる
+                for take in (6, 5, 4, 3, 2, 1):
+                    if len(curr_line) >= take:
+                        head = curr_line[:take]
+                        if (looks_like_short_tail(head) or bad_boundary(prev_line, curr_line)) and len(prev_line) + len(head) <= width + 3:
+                            prev_line += head
+                            curr_line = curr_line[take:]
+                            changed = True
+                            break
+
+                paragraph_lines[idx - 1] = prev_line
+                paragraph_lines[idx] = curr_line
+
+            paragraph_lines = [line for line in paragraph_lines if line != ""]
+
+        # 最終行が短すぎる場合は、可能なら前の行へ寄せる
+        if len(paragraph_lines) >= 2:
+            last_line = paragraph_lines[-1]
+            prev_line = paragraph_lines[-2]
+
+            if looks_like_short_tail(last_line) and len(prev_line) + len(last_line) <= width + 4:
+                paragraph_lines[-2] = prev_line + last_line
+                paragraph_lines.pop()
+
+        return paragraph_lines
+
+    for paragraph in (text or "").split("\n"):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            lines.append("")
+            continue
+
+        segments = split_into_segments(paragraph)
+        paragraph_lines: list[str] = []
+        current_line = ""
+
+        for segment in segments:
+            if len(segment) > width:
+                if current_line:
+                    paragraph_lines.append(current_line)
+                    current_line = ""
+                paragraph_lines.extend(chunk_long_segment(segment, width))
+                continue
+
+            if not current_line:
+                current_line = segment
+                continue
+
+            if len(current_line) + len(segment) <= width:
+                current_line += segment
+            else:
+                paragraph_lines.append(current_line)
+                current_line = segment
+
+        if current_line:
+            paragraph_lines.append(current_line)
+
+        paragraph_lines = rebalance_lines(paragraph_lines)
+        lines.extend(paragraph_lines)
+
+    return lines
+
+
+def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> bytes:
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    font_name = register_japanese_font()
+
+    def draw_frame() -> None:
+        c.setStrokeColor(HexColor("#8b0000"))
+        c.setLineWidth(2)
+        c.rect(10 * mm, 10 * mm, width - 20 * mm, height - 20 * mm)
+        c.setLineWidth(0.5)
+        c.rect(12 * mm, 12 * mm, width - 24 * mm, height - 24 * mm)
+        if os.path.exists(MIKO_IMAGE_PATH):
+            try:
+                c.drawImage(
+                    MIKO_IMAGE_PATH,
+                    width - 50 * mm,
+                    height - 50 * mm,
+                    width=35 * mm,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+            except Exception:
+                pass
+
+    def new_page() -> None:
+        c.showPage()
+        draw_frame()
+
+    draw_frame()
+
+    c.setFont(font_name, 24)
+    c.setFillColor(HexColor("#8b0000"))
+    c.drawCentredString(width / 2, height - 30 * mm, "龍神さまの鑑定書")
+
+    today = datetime.date.today()
+    reiwa = today.year - 2018
+    c.setFont(font_name, 12)
+    c.setFillColor(HexColor("#000000"))
+    c.drawString(25 * mm, height - 45 * mm, f"{user_name} 様")
+    c.drawRightString(width - 25 * mm, height - 45 * mm, f"令和 {reiwa}年 {today.month}月 {today.day}日")
+
+    y = height - 60 * mm
+    line_h = 7.2 * mm
+
+    def add_section(title: str, text: str, title_color: str = "#8b0000") -> None:
+        nonlocal y
+        if not text:
+            return
+        if y < 35 * mm:
+            new_page()
+            y = height - 25 * mm
+
+        c.setFont(font_name, 14)
+        c.setFillColor(HexColor(title_color))
+        c.drawString(25 * mm, y, f"【{title}】")
+        y -= line_h
+
+        c.setFont(font_name, 11)
+        c.setFillColor(HexColor("#000000"))
+        for line in wrap_text_by_char_count(text):
+            if y < 22 * mm:
+                new_page()
+                y = height - 25 * mm
+                c.setFont(font_name, 11)
+                c.setFillColor(HexColor("#000000"))
+            if line == "":
+                y -= line_h * 0.7
+                continue
+            c.drawString(30 * mm, y, line)
+            y -= line_h
+        y -= 3 * mm
+
+    add_section("龍神さまよりの挨拶", fortune_data.get("miko_intro", ""))
+    add_section("鑑定のまとめ", fortune_data.get("method_summary", ""))
+    add_section("手相の導き", fortune_data.get("palm_details", ""))
+    add_section("姓名判断", fortune_data.get("name_reading", ""))
+    add_section("四柱推命", fortune_data.get("shichusuimei", ""))
+    add_section("西洋占星術", fortune_data.get("western_astrology", ""))
+    add_section("直近：これから3カ月以内の運勢", fortune_data.get("fortune_3months", ""))
+    add_section("展望：これから1年先の運勢", fortune_data.get("fortune_1year", ""))
+    add_section("未来：2〜3年後の運勢", fortune_data.get("fortune_3years", ""))
+
+    advice = fortune_data.get("advice", {}) or {}
+    advice_text = "\n".join(
+        [
+            f"・開運アイテム: {advice.get('item', '')}",
+            f"・開運スポット: {advice.get('spot', '')}",
+            f"・開運カラー: {advice.get('color', '')}",
+            f"・運気を上げる行動: {advice.get('luck_action', '')}",
+        ]
+    )
+    add_section("巫女の助言", advice_text)
+
+    cautions = fortune_data.get("cautions", []) or []
+    caution_text = "\n".join([f"・{c}" for c in cautions])
+    add_section("心に留めること", caution_text)
+    add_section("結び", fortune_data.get("miko_closing", ""))
+
+    c.setFont(font_name, 10)
+    c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
