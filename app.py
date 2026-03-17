@@ -10,6 +10,7 @@ from config import (
     APP_SUBTITLE,
     APP_TITLE,
     CATEGORY_OPTIONS,
+    GEMINI_API_KEY,
     GEMINI_MODEL,
     HOUR_OPTIONS,
     MAX_IMAGE_FILES,
@@ -35,6 +36,7 @@ from ui.components import (
 )
 from ui.styles import render_app_css
 
+
 def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
@@ -50,10 +52,18 @@ def main() -> None:
             st.image(MIKO_IMAGE_PATH, width=96)
     with header_right:
         st.markdown(f'<div class="title-main">{html.escape(APP_TITLE)}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="result-body" style="margin-bottom:1.2rem;">{html.escape(APP_SUBTITLE)}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="result-body" style="margin-bottom:1.2rem;">{html.escape(APP_SUBTITLE)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # 一時的なデバッグ表示
+    st.write("DEBUG")
+    st.write("APP_PASSPHRASE loaded:", bool(APP_PASSPHRASE))
+    st.write("GEMINI_API_KEY loaded:", bool(GEMINI_API_KEY))
 
     if not APP_PASSPHRASE:
-        st.error("合言葉が設定されていません。.env ファイルの APP_PASSPHRASE を確認してください。")
+        st.error("合言葉が設定されていません。.env または Streamlit Secrets の APP_PASSPHRASE を確認してください。")
         st.stop()
 
     st.markdown('<div class="label-sm">合言葉を仰ってください</div>', unsafe_allow_html=True)
@@ -190,7 +200,10 @@ def main() -> None:
     render_form_gap(2)
 
     st.markdown('<div class="label-sm">手相の写真</div>', unsafe_allow_html=True)
-    st.markdown('<div class="input-help">手のひら全体が見える、明るくぶれの少ない写真をお選びください。画像は最大2枚までです。</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="input-help">手のひら全体が見える、明るくぶれの少ない写真をお選びください。画像は最大2枚までです。</div>',
+        unsafe_allow_html=True,
+    )
     uploaded_files = st.file_uploader(
         f"手相の写真（最大 {MAX_IMAGE_FILES} 枚 / 1枚 {MAX_IMAGE_SIZE_MB}MBまで）",
         type=["png", "jpg", "jpeg"],
