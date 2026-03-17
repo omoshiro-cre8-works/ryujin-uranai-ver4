@@ -1,11 +1,11 @@
 from typing import Any
 
 from config import (
-    APP_PASSPHRASE,
-    GEMINI_API_KEY,
     HAND_SIDE_OPTIONS,
     MAX_IMAGE_FILES,
     MAX_IMAGE_SIZE_MB,
+    get_app_passphrase,
+    get_gemini_api_key,
 )
 
 
@@ -47,6 +47,8 @@ def validate_inputs(
     normalized_name = normalize_text(user_name)
     normalized_birth_place = normalize_text(birth_place)
     normalized_detail = normalize_text(concern_detail)
+    gemini_api_key = get_gemini_api_key()
+    app_passphrase = get_app_passphrase()
 
     if not normalized_name:
         errors.append("お名前をご入力ください。")
@@ -79,13 +81,15 @@ def validate_inputs(
             get_mime_type(file.name)
         except ValueError as exc:
             errors.append(str(exc))
-        if index < len(hand_sides) and hand_sides[index] not in HAND_SIDE_OPTIONS:
-            errors.append(f"{file.name} の左右指定が不正です。")
-        if index < len(hand_sides) and hand_sides[index] == "右手か左手か選んでください":
-            errors.append("手相画像ごとに、右手か左手かを選んでください。")
+        if index < len(hand_sides):
+            selected = hand_sides[index]
+            if selected not in HAND_SIDE_OPTIONS[1:]:
+                errors.append("手相画像ごとに左手・右手を選択してください。")
 
-    if not GEMINI_API_KEY:
-        errors.append("Gemini APIキーが設定されていません。.env ファイルの GEMINI_API_KEY を確認してください。")
-    if not APP_PASSPHRASE:
-        errors.append("合言葉が設定されていません。.env ファイルの APP_PASSPHRASE を確認してください。")
+    if not gemini_api_key:
+        errors.append("Gemini APIキーが設定されていません。.env または Streamlit Secrets の GEMINI_API_KEY を確認してください。")
+
+    if not app_passphrase:
+        errors.append("合言葉が設定されていません。.env または Streamlit Secrets の APP_PASSPHRASE を確認してください。")
+
     return errors
