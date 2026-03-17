@@ -4,7 +4,8 @@ from typing import Any
 
 import streamlit as st
 
-from config import APP_PASSPHRASE, HAND_SIDE_OPTIONS
+from config import HAND_SIDE_OPTIONS, get_app_passphrase
+
 
 def render_html_box(title: str, body: str) -> None:
     safe_title = html.escape(title)
@@ -16,9 +17,10 @@ def render_html_box(title: str, body: str) -> None:
 
 
 def is_passphrase_ok(value: str) -> bool:
-    if not APP_PASSPHRASE:
+    app_passphrase = get_app_passphrase()
+    if not app_passphrase:
         return False
-    return hmac.compare_digest(value.encode("utf-8"), APP_PASSPHRASE.encode("utf-8"))
+    return hmac.compare_digest(value.encode("utf-8"), app_passphrase.encode("utf-8"))
 
 
 def render_form_gap(lines: int = 1) -> None:
