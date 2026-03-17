@@ -5,7 +5,7 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import GEMINI_MODEL, get_gemini_api_key
 from models.schemas import AppConfigError, FORTUNE_RESPONSE_JSON_SCHEMA, FortuneInput
 from services.formatter_service import normalize_fortune_result
 from services.prompt_service import build_system_instruction, build_user_prompt
@@ -13,10 +13,10 @@ from services.validation_service import get_mime_type
 
 
 @st.cache_resource
-def get_gemini_client() -> genai.Client:
-    if not GEMINI_API_KEY:
-        raise AppConfigError("Gemini APIキーが設定されていません。.env ファイルの GEMINI_API_KEY を確認してください。")
-    return genai.Client(api_key=GEMINI_API_KEY)
+def get_gemini_client(api_key: str) -> genai.Client:
+    if not api_key:
+        raise AppConfigError("Gemini APIキーが設定されていません。.env または Streamlit Secrets の GEMINI_API_KEY を確認してください。")
+    return genai.Client(api_key=api_key)
 
 
 def build_image_parts(uploaded_files: list[Any]) -> list[Any]:
@@ -29,7 +29,8 @@ def build_image_parts(uploaded_files: list[Any]) -> list[Any]:
 
 
 def call_gemini_fortune(data: FortuneInput) -> dict[str, Any]:
-    client = get_gemini_client()
+    api_key = get_gemini_api_key()
+    client = get_gemini_client(api_key)
     contents: list[Any] = [build_user_prompt(data)]
     contents.extend(data.image_parts)
 
