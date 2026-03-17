@@ -40,8 +40,8 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
 
-    APP_PASSPHRASE = get_app_passphrase()
-    GEMINI_API_KEY = get_gemini_api_key()
+    app_passphrase = get_app_passphrase()
+    gemini_api_key = get_gemini_api_key()
 
     if "fortune_json" not in st.session_state:
         st.session_state.fortune_json = None
@@ -61,14 +61,14 @@ def main() -> None:
 
     # 一時的なデバッグ表示
     st.write("DEBUG")
-    st.write("APP_PASSPHRASE loaded:", bool(APP_PASSPHRASE))
-    st.write("GEMINI_API_KEY loaded:", bool(GEMINI_API_KEY))
+    st.write("APP_PASSPHRASE loaded:", bool(app_passphrase))
+    st.write("GEMINI_API_KEY loaded:", bool(gemini_api_key))
     try:
         st.write("secrets keys:", list(st.secrets.keys()))
     except Exception:
         st.write("secrets keys: []")
 
-    if not APP_PASSPHRASE:
+    if not app_passphrase:
         st.error("合言葉が設定されていません。.env または Streamlit Secrets の APP_PASSPHRASE を確認してください。")
         st.stop()
 
