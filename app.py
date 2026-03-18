@@ -7,10 +7,43 @@ st.set_page_config(
     layout="centered"
 )
 
-st.title("龍神うらない（画像追加テスト版）")
+# まだ入力欄やボタンに直接干渉しない、軽いCSSだけ入れる
+st.markdown(
+    """
+    <style>
+    .test-box {
+        padding: 12px 16px;
+        border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 12px;
+        margin: 8px 0 20px 0;
+        background: rgba(255,255,255,0.03);
+    }
 
-st.write("これは Cloud Run 上での表示確認用の画像追加テスト版です。")
-st.write("この段階では、Streamlit標準機能に加えて画像表示のみ確認します。")
+    .test-note {
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.title("龍神うらない（軽いCSSテスト版）")
+
+st.write("これは Cloud Run 上での表示確認用の軽いCSSテスト版です。")
+st.write("この段階では、unsafe_allow_html=True と軽い style のみ確認します。")
+
+st.markdown(
+    """
+    <div class="test-box">
+        <div class="test-note">
+            このボックスは custom CSS で表示しています。<br>
+            まだ input や button の見た目には干渉していません。
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 st.divider()
 
@@ -64,4 +97,4 @@ if check_clicked:
 
 st.divider()
 
-st.caption("この画面で問題が出なければ、次に独自CSSやHTMLを段階的に戻します。")
+st.caption("この画面で問題が出なければ、次に input/button 周辺のCSS干渉を疑います。")
