@@ -1,7 +1,7 @@
 import json
+import logging
 from typing import Any
 
-import streamlit as st
 from google import genai
 from google.genai import types
 
@@ -11,12 +11,21 @@ from services.formatter_service import normalize_fortune_result
 from services.prompt_service import build_system_instruction, build_user_prompt
 from services.validation_service import get_mime_type
 
+logger = logging.getLogger(__name__)
+_client: genai.Client | None = None
+_client_api_key: str | None = None
 
-@st.cache_resource
+
+
 def get_gemini_client(api_key: str) -> genai.Client:
+    global _client, _client_api_key
     if not api_key:
-        raise AppConfigError("Gemini APIキーが設定されていません。.env または Streamlit Secrets の GEMINI_API_KEY を確認してください。")
-    return genai.Client(api_key=api_key)
+        raise AppConfigError('Gemini APIキーが設定されていません。Cloud Run の環境変数または Secret Manager の設定を確認してください。')
+    if _client is None or _client_api_key != api_key:
+        _client = genai.Client(api_key=api_key)
+        _client_api_key = api_key
+    return _client
+
 
 
 def build_image_parts(uploaded_files: list[Any]) -> list[Any]:
@@ -28,33 +37,36 @@ def build_image_parts(uploaded_files: list[Any]) -> list[Any]:
     return parts
 
 
+
 def call_gemini_fortune(data: FortuneInput) -> dict[str, Any]:
     api_key = get_gemini_api_key()
     client = get_gemini_client(api_key)
     contents: list[Any] = [build_user_prompt(data)]
     contents.extend(data.image_parts)
 
+    logger.info('gemini_request_started', extra={'model': GEMINI_MODEL, 'image_count': data.image_count})
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=build_system_instruction(),
-            response_mime_type="application/json",
+            response_mime_type='application/json',
             response_json_schema=FORTUNE_RESPONSE_JSON_SCHEMA,
             temperature=0.7,
         ),
     )
 
-    raw_text = (response.text or "").strip()
+    raw_text = (response.text or '').strip()
     if not raw_text:
-        raise ValueError("Gemini から鑑定結果が返ってきませんでした。")
+        raise ValueError('Gemini から鑑定結果が返ってきませんでした。')
 
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"JSON の解析に失敗しました: {exc}") from exc
+        raise ValueError(f'JSON の解析に失敗しました: {exc}') from exc
 
     if not isinstance(parsed, dict):
-        raise ValueError("鑑定結果の形式が想定と異なります。")
+        raise ValueError('鑑定結果の形式が想定と異なります。')
 
+    logger.info('gemini_request_completed')
     return normalize_fortune_result(parsed)
