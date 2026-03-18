@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 
 st.set_page_config(
@@ -6,14 +7,36 @@ st.set_page_config(
     layout="centered"
 )
 
-st.title("龍神うらない（中間テスト版）")
+st.title("龍神うらない（画像追加テスト版）")
 
-st.write(
-    "これは Cloud Run 上での表示確認用の中間テスト版です。"
-)
-st.write(
-    "この段階では、Streamlit標準機能のみを使って動作確認しています。"
-)
+st.write("これは Cloud Run 上での表示確認用の画像追加テスト版です。")
+st.write("この段階では、Streamlit標準機能に加えて画像表示のみ確認します。")
+
+st.divider()
+
+st.subheader("画像表示テスト")
+
+image_candidates = [
+    "miko.png",
+    "images/miko.png",
+    "./miko.png",
+    "./images/miko.png",
+]
+
+found_image = None
+for path in image_candidates:
+    if os.path.exists(path):
+        found_image = path
+        break
+
+if found_image:
+    st.success(f"画像ファイルを見つけました: {found_image}")
+    st.image(found_image, caption="テスト表示画像", use_container_width=True)
+else:
+    st.warning("画像ファイルが見つかりませんでした。")
+    st.write("確認したパス:")
+    for path in image_candidates:
+        st.write(f"- {path}")
 
 st.divider()
 
@@ -41,4 +64,4 @@ if check_clicked:
 
 st.divider()
 
-st.caption("この画面で問題が出なければ、次に画像表示や装飾を段階的に戻します。")
+st.caption("この画面で問題が出なければ、次に独自CSSやHTMLを段階的に戻します。")
