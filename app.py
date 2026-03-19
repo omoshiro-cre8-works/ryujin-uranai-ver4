@@ -7,19 +7,28 @@ import sys
 import streamlit as st
 
 from config import (
+    APP_ENV,
     APP_SUBTITLE,
     APP_TITLE,
     CATEGORY_OPTIONS,
+    GEMINI_MODEL,
     HOUR_OPTIONS,
     LOG_LEVEL,
     MAX_IMAGE_FILES,
     MAX_IMAGE_SIZE_MB,
     MIKO_IMAGE_PATH,
     MINUTE_OPTIONS,
+    SHOW_DEBUG,
     TIME_ACCURACY_OPTIONS,
     get_app_passphrase,
 )
-from services.validation_service import normalize_text, validate_inputs
+from models.schemas import FortuneInput, PalmImageMeta
+from services.fortune_service import build_image_parts, call_gemini_fortune
+from services.validation_service import (
+    format_birth_time_text,
+    normalize_text,
+    validate_inputs,
+)
 from ui.components import build_selected_hand_sides, is_passphrase_ok, render_form_gap
 from ui.styles import render_app_css
 
@@ -33,12 +42,20 @@ def configure_logging() -> None:
     )
 
 
+def init_session_state() -> None:
+    if "fortune_json" not in st.session_state:
+        st.session_state.fortune_json = None
+    if "user_name" not in st.session_state:
+        st.session_state.user_name = ""
+
+
 def main() -> None:
     configure_logging()
     logger = logging.getLogger(__name__)
 
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
+    init_session_state()
 
     app_passphrase = get_app_passphrase()
 
@@ -232,8 +249,8 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # 入力確認
-    if st.button("🐉 入力内容を確認する"):
+    # ここで Gemini 呼び出しを戻す
+    if st.button("🐉 龍神さまのお告げを聞く"):
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,
@@ -254,26 +271,68 @@ def main() -> None:
             for err in list(dict.fromkeys(errors)):
                 st.error(err)
         else:
-            st.success("ここまでの入力・画面動作は正常です。")
-            st.write("氏名:", user_name)
-            st.write("生年月日:", str(birth_date))
-            st.write("出生時刻の精度:", birth_time_accuracy)
-            st.write("出生地:", birth_place)
-            st.write("カテゴリ:", categories)
-            st.write("補足:", concern_detail)
-            st.write("画像枚数:", len(uploaded_files or []))
-            st.write("左右選択:", hand_sides)
+            try:
+                image_parts = build_image_parts(uploaded_files or [])
+                image_meta = [
+                    PalmImageMeta(filename=file.name, hand_side=hand_sides[idx])
+                    for idx, file in enumerate(uploaded_files or [])
+                ]
 
-            logger.info(
-                "input_validation_completed",
-                extra={
-                    "category_count": len(categories),
-                    "image_count": len(uploaded_files or []),
-                },
-            )
+                payload = FortuneInput(
+                    user_name=normalize_text(user_name),
+                    birth_date=birth_date,
+                    birth_place=normalize_text(birth_place),
+                    categories=categories,
+                    concern_detail=normalize_text(concern_detail),
+                    birth_time_accuracy=birth_time_accuracy,
+                    birth_time_text=format_birth_time_text(
+                        birth_time_accuracy, birth_hour, birth_minute
+                    ),
+                    image_parts=image_parts,
+                    image_meta=image_meta,
+                    image_count=len(image_parts),
+                )
+
+                with st.spinner("龍神さまが降臨されています..."):
+                    result = call_gemini_fortune(payload)
+
+                st.session_state.fortune_json = result
+                st.session_state.user_name = payload.user_name
+
+                st.success("お告げを授かりました。")
+                logger.info(
+                    "fortune_completed",
+                    extra={
+                        "env": APP_ENV,
+                        "category_count": len(categories),
+                        "image_count": len(image_parts),
+                    },
+                )
+
+            except Exception as exc:
+                logger.exception("fortune_failed")
+                st.error(f"鑑定中に支障が生じました: {exc}")
+
+    # 今回は render_html_box ではなく、生データ確認まで
+    data = st.session_state.fortune_json
+    if data:
+        st.divider()
+        st.subheader("Gemini応答の確認")
+        st.success("Gemini 呼び出しは成功しました。")
+        st.json(data)
+
+        if SHOW_DEBUG:
+            with st.expander("開発メモ"):
+                st.markdown(
+                    f'- 使用モデル: `{GEMINI_MODEL}`\n'
+                    f'- 手相画像枚数: {len(uploaded_files or [])}\n'
+                    f'- 相談カテゴリ: {", ".join(categories) if categories else "なし"}\n'
+                    f'- 出生時刻の精度: {birth_time_accuracy}\n'
+                    '- 入力データはセッション内のみで扱い、履歴保存は行わない設計です。'
+                )
 
     st.divider()
-    st.caption("この版で問題がなければ、次に Gemini 呼び出し前後の本処理を戻します。")
+    st.caption("この版で問題がなければ、次に render_html_box と PDF 出力を段階的に戻します。")
 
 
 if __name__ == "__main__":
