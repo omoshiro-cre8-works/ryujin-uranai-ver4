@@ -29,7 +29,12 @@ from services.validation_service import (
     normalize_text,
     validate_inputs,
 )
-from ui.components import build_selected_hand_sides, is_passphrase_ok, render_form_gap
+from ui.components import (
+    build_selected_hand_sides,
+    is_passphrase_ok,
+    render_form_gap,
+    render_html_box,
+)
 from ui.styles import render_app_css
 
 
@@ -249,7 +254,7 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # ここで Gemini 呼び出しを戻す
+    # Gemini 呼び出し
     if st.button("🐉 龍神さまのお告げを聞く"):
         errors = validate_inputs(
             user_name=user_name,
@@ -313,13 +318,42 @@ def main() -> None:
                 logger.exception("fortune_failed")
                 st.error(f"鑑定中に支障が生じました: {exc}")
 
-    # 今回は render_html_box ではなく、生データ確認まで
+    # 本番風の結果表示に戻す（PDFはまだ戻さない）
     data = st.session_state.fortune_json
     if data:
-        st.divider()
-        st.subheader("Gemini応答の確認")
-        st.success("Gemini 呼び出しは成功しました。")
-        st.json(data)
+        render_form_gap(2)
+        render_html_box("龍神さまよりの挨拶", data.get("miko_intro", ""))
+        render_html_box("今回の鑑定のまとめ", data.get("method_summary", ""))
+
+        st.markdown('<div class="heading-lg">各占術から見た流れ</div>', unsafe_allow_html=True)
+        render_html_box("手相術", data.get("palm_details", ""))
+        render_html_box("姓名判断", data.get("name_reading", ""))
+        render_html_box("四柱推命", data.get("shichusuimei", ""))
+        render_html_box("西洋占星術", data.get("western_astrology", ""))
+
+        st.markdown('<div class="heading-lg">時の波</div>', unsafe_allow_html=True)
+        render_html_box("直近：これから3カ月以内の運勢", data.get("fortune_3months", ""))
+        render_html_box("展望：これから1年先の運勢", data.get("fortune_1year", ""))
+        render_html_box("未来：2〜3年後の運勢", data.get("fortune_3years", ""))
+
+        advice = data.get("advice", {}) or {}
+        render_html_box(
+            "巫女の助言",
+            "\n\n".join(
+                [
+                    f'開運アイテム: {advice.get("item", "")}',
+                    f'開運スポット: {advice.get("spot", "")}',
+                    f'開運カラー: {advice.get("color", "")}',
+                    f'運気を上げる行動: {advice.get("luck_action", "")}',
+                ]
+            ),
+        )
+
+        cautions = data.get("cautions", []) or []
+        if cautions:
+            render_html_box("心に留めること", "\n".join([f"・{x}" for x in cautions]))
+
+        render_html_box("結び", data.get("miko_closing", ""))
 
         if SHOW_DEBUG:
             with st.expander("開発メモ"):
@@ -332,7 +366,7 @@ def main() -> None:
                 )
 
     st.divider()
-    st.caption("この版で問題がなければ、次に render_html_box と PDF 出力を段階的に戻します。")
+    st.caption("この版で問題がなければ、次に PDF 出力を戻します。")
 
 
 if __name__ == "__main__":
