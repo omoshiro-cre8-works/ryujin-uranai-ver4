@@ -25,18 +25,10 @@ from config import (
 from models.schemas import FortuneInput, PalmImageMeta
 from services.fortune_service import build_image_parts, call_gemini_fortune
 from services.pdf_service import generate_miko_letter_pdf
-from services.validation_service import (
-    format_birth_time_text,
-    normalize_text,
-    validate_inputs,
-)
-from ui.components import (
-    build_selected_hand_sides,
-    is_passphrase_ok,
-    render_form_gap,
-    render_html_box,
-)
+from services.validation_service import format_birth_time_text, normalize_text, validate_inputs
+from ui.components import build_selected_hand_sides, is_passphrase_ok, render_form_gap, render_html_box
 from ui.styles import render_app_css
+
 
 
 def configure_logging() -> None:
@@ -51,8 +43,8 @@ def configure_logging() -> None:
 def init_session_state() -> None:
     if "fortune_json" not in st.session_state:
         st.session_state.fortune_json = None
-    if "user_name" not in st.session_state:
-        st.session_state.user_name = ""
+    if 'user_name' not in st.session_state:
+        st.session_state.user_name = ''
 
 
 def main() -> None:
@@ -74,6 +66,7 @@ def main() -> None:
             st.caption("miko画像なし")
 
     with header_right:
+
         st.markdown(
             f'<div class="title-main">{html.escape(APP_TITLE)}</div>',
             unsafe_allow_html=True,
@@ -83,18 +76,21 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
+
     # 合言葉
     if not app_passphrase:
-        st.error("合言葉が設定されていません。運営者にお問い合わせください。")
+        st.error('合言葉が設定されていません。運営者にお問い合わせください。')
         st.stop()
 
     st.markdown('<div class="label-sm">合言葉を仰ってください</div>', unsafe_allow_html=True)
+
     passphrase = st.text_input(
         "",
         type="password",
         placeholder="合言葉を仰ってください",
         label_visibility="collapsed",
     )
+
     if not is_passphrase_ok(passphrase):
         st.stop()
 
@@ -102,31 +98,35 @@ def main() -> None:
 
     # 注意ボックス
     st.markdown(
+
         """
+
         <div style="border:1px solid #d98b73; background:#fff7f4; border-radius:14px; padding:14px 16px; margin:0.4rem 0 1rem 0;">
             <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
             <div style="margin-bottom:0.25rem;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
             <div style="margin-bottom:0.25rem;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
             <div>・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
         </div>
-        """,
+        ''',
         unsafe_allow_html=True,
     )
 
-    with st.expander("ご利用前のご案内", expanded=False):
+    with st.expander('ご利用前のご案内', expanded=False):
         st.markdown(
-            """**この鑑定について**  
+            '''**この鑑定について**  
 本アプリの鑑定結果は、参考情報としてお楽しみいただくためのものです。結果の正確性や、未来の出来事の実現を保証するものではありません。
 
 **免責事項**  
 本アプリの鑑定結果は、医療・法律・税務・投資その他の専門的助言に代わるものではありません。重要な判断は、ご自身の責任で行い、必要に応じて専門家へご相談ください。
 
 **個人情報の取り扱い**  
+
 ご入力いただいた氏名、生年月日、出生地、手相画像などの情報は、鑑定結果の生成確認のために一時的に使用します。
 """
         )
 
     st.caption("本アプリの鑑定は参考情報としてお楽しみください。")
+
 
     render_form_gap(2)
     st.markdown('<div class="heading-lg">📋 鑑定の準備</div>', unsafe_allow_html=True)
@@ -135,46 +135,50 @@ def main() -> None:
     st.markdown('<div class="label-sm">氏名（漢字）</div>', unsafe_allow_html=True)
     last_col, first_col = st.columns(2)
     with last_col:
-        last_name = st.text_input("姓", placeholder="山田")
+        last_name = st.text_input('姓', placeholder='山田')
     with first_col:
+
         first_name = st.text_input("名", placeholder="太郎")
     user_name = normalize_text(f"{last_name} {first_name}".strip())
+
 
     render_form_gap(2)
 
     # 生年月日
     st.markdown('<div class="label-sm">生年月日</div>', unsafe_allow_html=True)
     today = datetime.date.today()
-    year_options = ["年を選択"] + list(range(today.year, 1899, -1))
-    month_options = ["月を選択"] + list(range(1, 13))
-    day_options = ["日を選択"] + list(range(1, 32))
-
+    year_options = ['年を選択'] + list(range(today.year, 1899, -1))
+    month_options = ['月を選択'] + list(range(1, 13))
+    day_options = ['日を選択'] + list(range(1, 32))
     date_col1, date_col2, date_col3 = st.columns(3)
     with date_col1:
-        birth_year = st.selectbox("年", year_options, index=0)
+        birth_year = st.selectbox('年', year_options, index=0)
     with date_col2:
-        birth_month = st.selectbox("月", month_options, index=0)
+        birth_month = st.selectbox('月', month_options, index=0)
     with date_col3:
-        birth_day_candidate = st.selectbox("日", day_options, index=0)
+        birth_day_candidate = st.selectbox('日', day_options, index=0)
 
     birth_date = None
+
     if (
         birth_year != "年を選択"
         and birth_month != "月を選択"
         and birth_day_candidate != "日を選択"
     ):
+
         try:
             birth_date = datetime.date(
                 int(birth_year), int(birth_month), int(birth_day_candidate)
             )
         except ValueError:
-            st.error("存在しない日付です。生年月日を確認してください。")
+            st.error('存在しない日付です。生年月日を確認してください。')
             birth_date = None
 
     render_form_gap(2)
 
     # 出生時刻
     st.markdown('<div class="label-sm">出生時刻</div>', unsafe_allow_html=True)
+
     st.caption("出生時刻が不明でも鑑定できます。分かる範囲に応じてお選びください。")
     birth_time_accuracy = st.radio(
         "出生時刻の分かり具合",
@@ -190,53 +194,63 @@ def main() -> None:
     birth_hour = None
     birth_minute = None
     if birth_time_accuracy != "不明":
+
         time_col1, time_col2 = st.columns(2)
         with time_col1:
-            birth_hour = st.selectbox("時", HOUR_OPTIONS, index=12)
+            birth_hour = st.selectbox('時', HOUR_OPTIONS, index=12)
         with time_col2:
+
             birth_minute = st.selectbox("分", MINUTE_OPTIONS, index=0)
+
 
     render_form_gap(2)
 
     # 出生地
     st.markdown('<div class="label-sm">出生地</div>', unsafe_allow_html=True)
+
     birth_place = st.text_input("出生地", placeholder="東京都")
+
 
     render_form_gap(2)
 
     # 相談カテゴリ
     st.markdown('<div class="label-sm">相談カテゴリ</div>', unsafe_allow_html=True)
+
     st.caption("今いちばん知りたいことを中心に、1〜3個お選びください。")
     category_options_with_blank = ["（未選択）"] + CATEGORY_OPTIONS
 
+
     cat_col1, cat_col2, cat_col3 = st.columns(3)
     with cat_col1:
-        category_1 = st.selectbox("相談カテゴリ1", category_options_with_blank, index=0)
+        category_1 = st.selectbox('相談カテゴリ1', category_options_with_blank, index=0)
     with cat_col2:
-        category_2 = st.selectbox("相談カテゴリ2", category_options_with_blank, index=0)
+        category_2 = st.selectbox('相談カテゴリ2', category_options_with_blank, index=0)
     with cat_col3:
-        category_3 = st.selectbox("相談カテゴリ3", category_options_with_blank, index=0)
+        category_3 = st.selectbox('相談カテゴリ3', category_options_with_blank, index=0)
 
     raw_categories = [category_1, category_2, category_3]
     categories = []
     for cat in raw_categories:
-        if cat != "（未選択）" and cat not in categories:
+        if cat != '（未選択）' and cat not in categories:
             categories.append(cat)
 
     render_form_gap(1)
 
     # 補足
     st.markdown('<div class="label-sm">特に重視したいことの補足</div>', unsafe_allow_html=True)
+
     concern_detail = st.text_area(
         "特に重視したいことの補足",
         placeholder="例: 個人事業主として今後どう進めるべきか、今後1年の流れを重視して見てほしい、など",
         height=110,
     )
 
+
     render_form_gap(2)
 
     # 画像アップロード
     st.markdown('<div class="label-sm">手相の写真</div>', unsafe_allow_html=True)
+
     st.markdown(
         f'<div class="input-help">手のひら全体が見える、明るくぶれの少ない写真をお選びください。画像は最大{MAX_IMAGE_FILES}枚までです。</div>',
         unsafe_allow_html=True,
@@ -248,15 +262,18 @@ def main() -> None:
         accept_multiple_files=True,
     )
 
+
     hand_sides = []
     if uploaded_files:
         st.markdown('<div class="input-help">各画像の左右を選んでください。</div>', unsafe_allow_html=True)
         hand_sides = build_selected_hand_sides(uploaded_files)
 
+
     render_form_gap(2)
 
     # Gemini 呼び出し
     if st.button("🐉 龍神さまのお告げを聞く"):
+
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,
@@ -270,19 +287,23 @@ def main() -> None:
         )
 
         if birth_date is None:
+
             errors.append("生年月日を選択してください。")
 
         if errors:
             st.error("入力内容に確認事項があります。")
+
             for err in list(dict.fromkeys(errors)):
                 st.error(err)
         else:
             try:
                 image_parts = build_image_parts(uploaded_files or [])
+
                 image_meta = [
                     PalmImageMeta(filename=file.name, hand_side=hand_sides[idx])
                     for idx, file in enumerate(uploaded_files or [])
                 ]
+
 
                 payload = FortuneInput(
                     user_name=normalize_text(user_name),
@@ -299,11 +320,14 @@ def main() -> None:
                     image_count=len(image_parts),
                 )
 
+
                 with st.spinner("龍神さまが降臨されています..."):
+
                     result = call_gemini_fortune(payload)
 
                 st.session_state.fortune_json = result
                 st.session_state.user_name = payload.user_name
+
 
                 st.success("お告げを授かりました。")
                 logger.info(
@@ -319,8 +343,10 @@ def main() -> None:
                 logger.exception("fortune_failed")
                 st.error(f"鑑定中に支障が生じました: {exc}")
 
+
     # 結果表示 + PDF出力
     data = st.session_state.fortune_json
+
     if data:
         render_form_gap(2)
         render_html_box("龍神さまよりの挨拶", data.get("miko_intro", ""))
@@ -364,6 +390,7 @@ def main() -> None:
                 data=pdf_data,
                 file_name=f"miko_letter_{safe_name}.pdf",
                 mime="application/pdf",
+
             )
         except Exception as exc:
             st.error("PDF鑑定書の作成に失敗しました。フォントファイル、巫女画像、設定内容を確認してください。")
@@ -384,5 +411,5 @@ def main() -> None:
     st.caption("この版でPDFも問題なければ、ほぼ本番候補です。")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
