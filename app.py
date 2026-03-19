@@ -24,6 +24,7 @@ from config import (
 )
 from models.schemas import FortuneInput, PalmImageMeta
 from services.fortune_service import build_image_parts, call_gemini_fortune
+from services.pdf_service import generate_miko_letter_pdf
 from services.validation_service import (
     format_birth_time_text,
     normalize_text,
@@ -106,7 +107,7 @@ def main() -> None:
             <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
             <div style="margin-bottom:0.25rem;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
             <div style="margin-bottom:0.25rem;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
-            <div>・ご入力内容は鑑定結果の生成確認のために一時的に使用し、この検証版では履歴保存を行いません。</div>
+            <div>・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -318,7 +319,7 @@ def main() -> None:
                 logger.exception("fortune_failed")
                 st.error(f"鑑定中に支障が生じました: {exc}")
 
-    # 本番風の結果表示に戻す（PDFはまだ戻さない）
+    # 結果表示 + PDF出力
     data = st.session_state.fortune_json
     if data:
         render_form_gap(2)
@@ -355,6 +356,20 @@ def main() -> None:
 
         render_html_box("結び", data.get("miko_closing", ""))
 
+        try:
+            pdf_data = generate_miko_letter_pdf(st.session_state.user_name, data)
+            safe_name = st.session_state.user_name.replace(" ", "_")
+            st.download_button(
+                label="📜 巫女からの手紙を保存する（PDF）",
+                data=pdf_data,
+                file_name=f"miko_letter_{safe_name}.pdf",
+                mime="application/pdf",
+            )
+        except Exception as exc:
+            st.error("PDF鑑定書の作成に失敗しました。フォントファイル、巫女画像、設定内容を確認してください。")
+            if SHOW_DEBUG:
+                st.caption(str(exc))
+
         if SHOW_DEBUG:
             with st.expander("開発メモ"):
                 st.markdown(
@@ -366,7 +381,7 @@ def main() -> None:
                 )
 
     st.divider()
-    st.caption("この版で問題がなければ、次に PDF 出力を戻します。")
+    st.caption("この版でPDFも問題なければ、ほぼ本番候補です。")
 
 
 if __name__ == "__main__":
