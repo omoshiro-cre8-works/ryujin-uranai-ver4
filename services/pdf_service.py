@@ -189,7 +189,6 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
 
 
 def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> bytes:
-    # formatter_service の整形を先に通す
     data = normalize_fortune_result(fortune_data or {})
 
     buffer = io.BytesIO()
@@ -197,31 +196,32 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
     width, height = A4
     font_name = register_japanese_font()
 
-    def draw_page_base() -> None:
-        # 外枠
+    def draw_page_base(page_num: int) -> None:
+        # outer frame
         c.setStrokeColor(HexColor("#8b0000"))
         c.setLineWidth(2)
         c.rect(10 * mm, 10 * mm, width - 20 * mm, height - 20 * mm)
         c.setLineWidth(0.5)
         c.rect(12 * mm, 12 * mm, width - 24 * mm, height - 24 * mm)
 
-        # ヘッダー線
+        # header line moved below top ornament so it does not overlap
+        header_y = height - 24 * mm
         c.setStrokeColor(HexColor("#d8b6a9"))
         c.setLineWidth(0.8)
-        c.line(18 * mm, height - 18 * mm, width - 18 * mm, height - 18 * mm)
+        c.line(18 * mm, header_y, width - 18 * mm, header_y)
 
-        # ヘッダータイトル（追加）
+        # header title moved inside margin area, away from border
         c.setFont(font_name, 11)
         c.setFillColor(HexColor("#8b0000"))
-        c.drawString(22 * mm, height - 14 * mm, APP_TITLE or "龍神さまのお告げ")
+        c.drawString(22 * mm, height - 17 * mm, APP_TITLE or "龍神さまのお告げ")
 
-        # 巫女画像（追加）
+        # header image moved slightly down from ornament frame
         if os.path.exists(MIKO_IMAGE_PATH):
             try:
                 c.drawImage(
                     MIKO_IMAGE_PATH,
                     width - 34 * mm,
-                    height - 18 * mm,
+                    height - 21 * mm,
                     width=12 * mm,
                     height=12 * mm,
                     preserveAspectRatio=True,
@@ -231,31 +231,34 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
             except Exception:
                 pass
 
-        # 末尾署名（main版維持）
-        c.setFont(font_name, 10)
-        c.setFillColor(HexColor("#000000"))
-        c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
+        # footer sign only on last page -> page 0 means skip, final draw later
+        if page_num == -1:
+            c.setFont(font_name, 10)
+            c.setFillColor(HexColor("#000000"))
+            c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
+
+    page_num = 1
 
     def new_page() -> None:
+        nonlocal page_num
         c.showPage()
-        draw_page_base()
+        page_num += 1
+        draw_page_base(page_num)
 
-    draw_page_base()
+    draw_page_base(page_num)
 
-    # 本文タイトル（main版維持）
     c.setFont(font_name, 24)
     c.setFillColor(HexColor("#8b0000"))
-    c.drawCentredString(width / 2, height - 32 * mm, "龍神さまの鑑定書")
+    c.drawCentredString(width / 2, height - 36 * mm, "龍神さまの鑑定書")
 
     today = datetime.date.today()
     reiwa = today.year - 2018
     c.setFont(font_name, 12)
     c.setFillColor(HexColor("#000000"))
-    c.drawString(25 * mm, height - 46 * mm, f"{user_name} 様")
-    c.drawRightString(width - 25 * mm, height - 46 * mm, f"令和 {reiwa}年 {today.month}月 {today.day}日")
+    c.drawString(25 * mm, height - 50 * mm, f"{user_name} 様")
+    c.drawRightString(width - 25 * mm, height - 50 * mm, f"令和 {reiwa}年 {today.month}月 {today.day}日")
 
-    # 本文開始位置・行間は main 版寄り
-    y = height - 61 * mm
+    y = height - 66 * mm
     line_h = 7.2 * mm
 
     def add_section(title: str, text: str, title_color: str = "#8b0000") -> None:
@@ -265,12 +268,11 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
 
         wrapped_lines = wrap_text_by_char_count(text)
 
-        # 見出し＋最低3行は同ページに残す
         min_needed_lines = min(max(len(wrapped_lines), 1), 3)
         min_needed = line_h * (1 + min_needed_lines) + 5 * mm
         if y < 22 * mm + min_needed:
             new_page()
-            y = height - 25 * mm
+            y = height - 31 * mm
 
         c.setFont(font_name, 14)
         c.setFillColor(HexColor(title_color))
@@ -284,7 +286,7 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
             remaining_lines = len(wrapped_lines) - i
             if y < 22 * mm + (line_h * min(remaining_lines, 2)):
                 new_page()
-                y = height - 25 * mm
+                y = height - 31 * mm
                 c.setFont(font_name, 11)
                 c.setFillColor(HexColor("#000000"))
             if line == "":
@@ -318,6 +320,11 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
     caution_text = "\n".join([f"・{c}" for c in cautions])
     add_section("心に留めること", caution_text)
     add_section("結び", data.get("miko_closing", ""))
+
+    # Only on the final page
+    c.setFont(font_name, 10)
+    c.setFillColor(HexColor("#000000"))
+    c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
 
     c.save()
     buffer.seek(0)
