@@ -105,11 +105,11 @@ def main() -> None:
     # 注意ボックス
     st.markdown(
         """
-        <div style="border:1px solid #d98b73; background:#fff7f4; border-radius:14px; padding:14px 16px; margin:0.4rem 0 1rem 0;">
+        <div style="border:1px solid #d98b73; background:#fff7f4; border-radius:14px; padding:14px 16px; margin:0.4rem 0 1rem 0; color:#3b312d;">
             <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
-            <div style="margin-bottom:0.25rem;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
-            <div style="margin-bottom:0.25rem;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
-            <div>・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
+            <div style="margin-bottom:0.25rem; color:#3b312d;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
+            <div style="margin-bottom:0.25rem; color:#3b312d;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
+            <div style="color:#3b312d;">・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -382,7 +382,6 @@ def main() -> None:
                 )
 
     st.divider()
-    st.caption("この版でPDFも問題なければ、ほぼ本番候補です。")
 
 
 if __name__ == "__main__":
