@@ -23,19 +23,56 @@ def is_passphrase_ok(passphrase: str) -> bool:
     return True
 
 
+def _safe_file_bytes(uploaded_file: Any) -> bytes:
+    """UploadedFile を安全に bytes 化して返す。"""
+    if uploaded_file is None:
+        return b""
+
+    try:
+        data = uploaded_file.getvalue()
+        if data:
+            return data
+    except Exception:
+        pass
+
+    try:
+        uploaded_file.seek(0)
+        data = uploaded_file.read()
+        if data:
+            return data
+    except Exception:
+        pass
+
+    return b""
+
+
 def build_selected_hand_sides(uploaded_files: list[Any]) -> list[str]:
     selections: list[str] = []
+
     for idx, uploaded_file in enumerate(uploaded_files, start=1):
-        st.markdown(f'**画像{idx}: {html.escape(uploaded_file.name)}**')
-        st.image(uploaded_file, caption=uploaded_file.name, width=260)
+        raw_name = getattr(uploaded_file, "name", f"image_{idx}")
+        file_name = html.escape(raw_name)
+        image_bytes = _safe_file_bytes(uploaded_file)
+
+        st.markdown(f'**画像{idx}: {file_name}**')
+
+        if image_bytes:
+            st.image(image_bytes, caption=raw_name, width=260)
+        else:
+            st.warning(f"{file_name} のプレビュー表示に失敗しました。")
 
         selected = st.radio(
-            f'{uploaded_file.name} の左右',
+            f'{raw_name} の左右',
             HAND_SIDE_OPTIONS[1:],
             horizontal=True,
-            key=f'hand_side_{idx}_{uploaded_file.name}',
+            key=f'hand_side_{idx}_{raw_name}',
         )
         selections.append(selected)
+
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
 
         if idx != len(uploaded_files):
             st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
