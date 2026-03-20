@@ -334,20 +334,27 @@ def render_app_css() -> None:
             box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
         }
 
-        .result-title {
-            font-size: 1.03rem;
-            font-weight: 700;
+        /* ここを強化：鑑定結果カード内の見出しを朱色固定 */
+        .stMarkdown .result-box .result-title,
+        .stMarkdown .result-box .result-title *,
+        .result-box .result-title,
+        .result-box .result-title * {
+            font-size: 1.03rem !important;
+            font-weight: 700 !important;
             color: #8a3d24 !important;
-            margin-bottom: 0.55rem;
-            line-height: 1.6;
+            margin-bottom: 0.55rem !important;
+            line-height: 1.6 !important;
         }
 
-        .result-body {
-            line-height: 1.9;
+        .stMarkdown .result-box .result-body,
+        .stMarkdown .result-box .result-body *,
+        .result-box .result-body,
+        .result-box .result-body * {
+            line-height: 1.9 !important;
             color: #2f2f2f !important;
-            font-size: 0.98rem;
-            white-space: pre-wrap;
-            font-weight: 500;
+            font-size: 0.98rem !important;
+            white-space: pre-wrap !important;
+            font-weight: 500 !important;
         }
 
         .block-container {
@@ -380,9 +387,10 @@ def render_app_css() -> None:
                 padding: 14px 14px;
             }
 
-            .result-body {
-                font-size: 0.95rem;
-                line-height: 1.85;
+            .stMarkdown .result-box .result-body,
+            .result-box .result-body {
+                font-size: 0.95rem !important;
+                line-height: 1.85 !important;
             }
         }
         </style>
