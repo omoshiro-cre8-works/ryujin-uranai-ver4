@@ -3,12 +3,12 @@ import streamlit as st
 
 def render_app_css() -> None:
     st.markdown(
-        """
+        '''
         <style>
         /* ===== 全体テーマ ===== */
         html, body, [class*="css"] {
             font-family: "Yu Mincho", "Hiragino Mincho ProN", "Hiragino Mincho Pro",
-                         "YuMincho", "MS PMincho", Georgia, serif;
+                         "YuMincho", "MS PMincho", Georgia, serif !important;
         }
 
         .stApp,
@@ -39,6 +39,13 @@ def render_app_css() -> None:
             max-width: 760px;
             padding-top: 1.4rem;
             padding-bottom: 3rem;
+        }
+
+        .stApp, .stApp *,
+        p, li, div, label, span,
+        h1, h2, h3, h4, h5, h6 {
+            font-family: "Yu Mincho", "Hiragino Mincho ProN", "Hiragino Mincho Pro",
+                         "YuMincho", "MS PMincho", Georgia, serif !important;
         }
 
         p, li, div, label, span {
@@ -89,7 +96,6 @@ def render_app_css() -> None:
             line-height: 1.7;
         }
 
-        /* app.py でサブタイトルに result-body を流用しているため補正 */
         .title-main + .result-body {
             color: #5f5f5f;
         }
@@ -125,6 +131,45 @@ def render_app_css() -> None:
             color: #1f1f1f !important;
         }
 
+        /* selectbox 開いたメニュー */
+        div[role="listbox"],
+        ul[role="listbox"] {
+            background: #f2f2f2 !important;
+            border: 1px solid #d6d6d6 !important;
+            color: #1f1f1f !important;
+        }
+
+        div[role="option"],
+        li[role="option"] {
+            background: #f2f2f2 !important;
+            color: #1f1f1f !important;
+        }
+
+        div[role="option"]:hover,
+        li[role="option"]:hover {
+            background: #e7e7e7 !important;
+            color: #1f1f1f !important;
+        }
+
+        div[aria-selected="true"],
+        li[aria-selected="true"] {
+            background: #dddddd !important;
+            color: #1f1f1f !important;
+        }
+
+        /* portal配下のpopover対策 */
+        body [data-baseweb="popover"],
+        body [data-baseweb="popover"] * {
+            background: #f2f2f2 !important;
+            color: #1f1f1f !important;
+        }
+
+        body [data-baseweb="menu"],
+        body [data-baseweb="menu"] * {
+            background: #f2f2f2 !important;
+            color: #1f1f1f !important;
+        }
+
         /* radio / checkbox */
         .stRadio label,
         .stCheckbox label {
@@ -144,11 +189,25 @@ def render_app_css() -> None:
             color: #444444;
         }
 
+        [data-testid="stFileUploader"] button {
+            background: #efefef !important;
+            color: #333333 !important;
+            border: 1px solid #d2d2d2 !important;
+            border-radius: 10px !important;
+            font-weight: 700 !important;
+        }
+
+        [data-testid="stFileUploader"] button:hover {
+            background: #e4e4e4 !important;
+            color: #222222 !important;
+            border-color: #c8c8c8 !important;
+        }
+
         /* ===== ボタン ===== */
         .stButton > button {
-            background: #8a3d24;
-            color: #ffffff;
-            border: 1px solid #8a3d24;
+            background: #f3d6de;
+            color: #7a3248;
+            border: 1px solid #e2b8c4;
             border-radius: 999px;
             padding: 0.6rem 1.1rem;
             font-weight: 700;
@@ -156,18 +215,17 @@ def render_app_css() -> None:
         }
 
         .stButton > button:hover {
-            background: #9a4a2f;
-            border-color: #9a4a2f;
-            color: #ffffff;
+            background: #ecc9d4;
+            border-color: #d8a8b8;
+            color: #6e2940;
         }
 
         .stButton > button:focus:not(:active) {
-            border-color: #9a4a2f;
-            box-shadow: 0 0 0 0.2rem rgba(154, 74, 47, 0.18);
-            color: #ffffff;
+            border-color: #d8a8b8;
+            box-shadow: 0 0 0 0.2rem rgba(216, 168, 184, 0.28);
+            color: #6e2940;
         }
 
-        /* download button */
         .stDownloadButton > button {
             background: #fff7f4;
             color: #8a3d24;
@@ -245,7 +303,6 @@ def render_app_css() -> None:
             white-space: pre-wrap;
         }
 
-        /* ===== 区切り・余白 ===== */
         .block-container {
             padding-top: 1.2rem;
         }
@@ -254,7 +311,6 @@ def render_app_css() -> None:
             margin-bottom: 0.15rem;
         }
 
-        /* ===== スマホ幅 ===== */
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
                 padding-top: 1rem;
@@ -281,6 +337,6 @@ def render_app_css() -> None:
             }
         }
         </style>
-        """,
+        ''',
         unsafe_allow_html=True,
     )
