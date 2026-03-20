@@ -219,7 +219,7 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
                 c.drawImage(
                     MIKO_IMAGE_PATH,
                     width - 36.5 * mm,
-                    height - 17.0 * mm,
+                    height - 22.0 * mm,
                     width=18 * mm,
                     height=18 * mm,
                     preserveAspectRatio=True,
