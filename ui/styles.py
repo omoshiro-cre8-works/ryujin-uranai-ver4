@@ -15,9 +15,11 @@ def render_app_css() -> None:
             color: #1f1f1f !important;
         }
 
+        /* ヘッダーは白に戻す */
         [data-testid="stHeader"] {
-            background: transparent !important;
+            background: rgba(255, 255, 255, 0.96) !important;
             box-shadow: none !important;
+            border-bottom: 1px solid #f2e7e2 !important;
         }
 
         [data-testid="stToolbar"] {
@@ -32,9 +34,10 @@ def render_app_css() -> None:
             background: #ffffff !important;
         }
 
+        /* タイトルと巫女画像を少し下げる */
         [data-testid="stMainBlockContainer"] {
             max-width: 760px;
-            padding-top: 0.8rem;
+            padding-top: 1.6rem;
             padding-bottom: 3rem;
         }
 
@@ -334,7 +337,6 @@ def render_app_css() -> None:
             box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
         }
 
-        /* ここを強化：鑑定結果カード内の見出しを朱色固定 */
         .stMarkdown .result-box .result-title,
         .stMarkdown .result-box .result-title *,
         .result-box .result-title,
@@ -367,7 +369,7 @@ def render_app_css() -> None:
 
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
-                padding-top: 0.8rem;
+                padding-top: 1.25rem;
                 padding-left: 1rem;
                 padding-right: 1rem;
                 padding-bottom: 2.4rem;
