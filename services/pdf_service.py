@@ -11,8 +11,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from config import MIKO_IMAGE_PATH, PDF_FONT_PATHS
-
+from config import APP_TITLE, MIKO_IMAGE_PATH, PDF_FONT_PATHS
+from services.formatter_service import normalize_fortune_result
 
 
 def register_japanese_font() -> str:
@@ -59,7 +59,9 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
             return False
         if right[0] in forbidden_line_start_chars:
             return True
-        if len(right) >= 1 and is_kanji(right[0]) and (len(right) == 1 or (len(right) >= 2 and is_kanji(right[0]) and is_hiragana(right[1]))):
+        if len(right) >= 1 and is_kanji(right[0]) and (
+            len(right) == 1 or (len(right) >= 2 and is_kanji(right[0]) and is_hiragana(right[1]))
+        ):
             return True
         if len(right) >= 1 and is_hiragana(right[0]):
             head = right[:2]
@@ -120,7 +122,7 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
         return result
 
     def split_into_segments(paragraph: str) -> list[str]:
-        parts = re.findall(r'.+?(?:[。、】【』」]|[、，]|$)', paragraph)
+        parts = re.findall(r".+?(?:[。、】【』」]|[、，]|$)", paragraph)
         return [p for p in (part.strip() for part in parts) if p]
 
     def rebalance_lines(paragraph_lines: list[str]) -> list[str]:
@@ -148,7 +150,7 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
                             break
                 paragraph_lines[idx - 1] = prev_line
                 paragraph_lines[idx] = curr_line
-            paragraph_lines = [line for line in paragraph_lines if line != '']
+            paragraph_lines = [line for line in paragraph_lines if line != ""]
         if len(paragraph_lines) >= 2:
             last_line = paragraph_lines[-1]
             prev_line = paragraph_lines[-2]
@@ -164,7 +166,7 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
             continue
         segments = split_into_segments(paragraph)
         paragraph_lines: list[str] = []
-        current_line = ''
+        current_line = ""
         for segment in segments:
             if len(segment) > width:
                 if current_line:
@@ -189,59 +191,94 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
 
 
 def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> bytes:
+    data = normalize_fortune_result(fortune_data or {})
+
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     font_name = register_japanese_font()
 
-    def draw_frame() -> None:
-        c.setStrokeColor(HexColor('#8b0000'))
+    def draw_page_base(page_num: int) -> None:
+        c.setStrokeColor(HexColor("#8b0000"))
         c.setLineWidth(2)
         c.rect(10 * mm, 10 * mm, width - 20 * mm, height - 20 * mm)
         c.setLineWidth(0.5)
         c.rect(12 * mm, 12 * mm, width - 24 * mm, height - 24 * mm)
+
+        header_y = height - 24 * mm
+        c.setStrokeColor(HexColor("#d8b6a9"))
+        c.setLineWidth(0.8)
+        c.line(18 * mm, header_y, width - 18 * mm, header_y)
+
+        # タイトルを少し下げて罫線に近づける
+        c.setFont(font_name, 11)
+        c.setFillColor(HexColor("#8b0000"))
+        c.drawString(22 * mm, height - 20.5 * mm, APP_TITLE or "龍神さまのお告げ")
+
+        # 画像を約150%に拡大し、飾り罫から少しはみ出す配置
         if os.path.exists(MIKO_IMAGE_PATH):
             try:
-                c.drawImage(MIKO_IMAGE_PATH, width - 50 * mm, height - 50 * mm, width=35 * mm, preserveAspectRatio=True, mask='auto')
+                c.drawImage(
+                    MIKO_IMAGE_PATH,
+                    width - 36.5 * mm,
+                    height - 22.0 * mm,
+                    width=18 * mm,
+                    height=18 * mm,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                    anchor="ne",
+                )
             except Exception:
                 pass
 
-    def new_page() -> None:
-        c.showPage()
-        draw_frame()
+    page_num = 1
 
-    draw_frame()
+    def new_page() -> None:
+        nonlocal page_num
+        c.showPage()
+        page_num += 1
+        draw_page_base(page_num)
+
+    draw_page_base(page_num)
+
     c.setFont(font_name, 24)
-    c.setFillColor(HexColor('#8b0000'))
-    c.drawCentredString(width / 2, height - 30 * mm, '龍神さまの鑑定書')
+    c.setFillColor(HexColor("#8b0000"))
+    c.drawCentredString(width / 2, height - 36 * mm, "龍神さまの鑑定書")
 
     today = datetime.date.today()
     reiwa = today.year - 2018
     c.setFont(font_name, 12)
-    c.setFillColor(HexColor('#000000'))
-    c.drawString(25 * mm, height - 45 * mm, f'{user_name} 様')
-    c.drawRightString(width - 25 * mm, height - 45 * mm, f'令和 {reiwa}年 {today.month}月 {today.day}日')
+    c.setFillColor(HexColor("#000000"))
+    c.drawString(25 * mm, height - 50 * mm, f"{user_name} 様")
+    c.drawRightString(width - 25 * mm, height - 50 * mm, f"令和 {reiwa}年 {today.month}月 {today.day}日")
 
-    y = height - 60 * mm
+    y = height - 66 * mm
     line_h = 7.2 * mm
 
     def add_section(title: str, text: str, title_color: str = '#8b0000') -> None:
         nonlocal y
         if not text:
             return
-        if y < 35 * mm:
+
+        wrapped_lines = wrap_text_by_char_count(text)
+        min_needed_lines = min(max(len(wrapped_lines), 1), 3)
+        min_needed = line_h * (1 + min_needed_lines) + 5 * mm
+        if y < 22 * mm + min_needed:
             new_page()
-            y = height - 25 * mm
+            y = height - 31 * mm
+
         c.setFont(font_name, 14)
         c.setFillColor(HexColor(title_color))
         c.drawString(25 * mm, y, f'【{title}】')
         y -= line_h
         c.setFont(font_name, 11)
-        c.setFillColor(HexColor('#000000'))
-        for line in wrap_text_by_char_count(text):
-            if y < 22 * mm:
+        c.setFillColor(HexColor("#000000"))
+
+        for i, line in enumerate(wrapped_lines):
+            remaining_lines = len(wrapped_lines) - i
+            if y < 22 * mm + (line_h * min(remaining_lines, 2)):
                 new_page()
-                y = height - 25 * mm
+                y = height - 31 * mm
                 c.setFont(font_name, 11)
                 c.setFillColor(HexColor('#000000'))
             if line == '':
@@ -249,34 +286,37 @@ def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> by
                 continue
             c.drawString(30 * mm, y, line)
             y -= line_h
+
         y -= 3 * mm
 
-    add_section('龍神さまよりの挨拶', fortune_data.get('miko_intro', ''))
-    add_section('鑑定のまとめ', fortune_data.get('method_summary', ''))
-    add_section('手相の導き', fortune_data.get('palm_details', ''))
-    add_section('姓名判断', fortune_data.get('name_reading', ''))
-    add_section('四柱推命', fortune_data.get('shichusuimei', ''))
-    add_section('西洋占星術', fortune_data.get('western_astrology', ''))
-    add_section('直近：これから3カ月以内の運勢', fortune_data.get('fortune_3months', ''))
-    add_section('展望：これから1年先の運勢', fortune_data.get('fortune_1year', ''))
-    add_section('未来：2〜3年後の運勢', fortune_data.get('fortune_3years', ''))
+    add_section("龍神さまよりの挨拶", data.get("miko_intro", ""))
+    add_section("鑑定のまとめ", data.get("method_summary", ""))
+    add_section("手相の導き", data.get("palm_details", ""))
+    add_section("姓名判断", data.get("name_reading", ""))
+    add_section("四柱推命", data.get("shichusuimei", ""))
+    add_section("西洋占星術", data.get("western_astrology", ""))
+    add_section("直近：これから3カ月以内の運勢", data.get("fortune_3months", ""))
+    add_section("展望：これから1年先の運勢", data.get("fortune_1year", ""))
+    add_section("未来：2〜3年後の運勢", data.get("fortune_3years", ""))
 
-    advice = fortune_data.get('advice', {}) or {}
-    advice_text = '\n'.join([
-        f'・開運アイテム: {advice.get("item", "")}',
-        f'・開運スポット: {advice.get("spot", "")}',
-        f'・開運カラー: {advice.get("color", "")}',
-        f'・運気を上げる行動: {advice.get("luck_action", "")}',
+    advice = data.get("advice", {}) or {}
+    advice_text = "\n".join([
+        f"・開運アイテム: {advice.get('item', '')}",
+        f"・開運スポット: {advice.get('spot', '')}",
+        f"・開運カラー: {advice.get('color', '')}",
+        f"・運気を上げる行動: {advice.get('luck_action', '')}",
     ])
-    add_section('巫女の助言', advice_text)
+    add_section("巫女の助言", advice_text)
 
-    cautions = fortune_data.get('cautions', []) or []
-    caution_text = '\n'.join([f'・{c}' for c in cautions])
-    add_section('心に留めること', caution_text)
-    add_section('結び', fortune_data.get('miko_closing', ''))
+    cautions = data.get("cautions", []) or []
+    caution_text = "\n".join([f"・{c}" for c in cautions])
+    add_section("心に留めること", caution_text)
+    add_section("結び", data.get("miko_closing", ""))
 
     c.setFont(font_name, 10)
-    c.drawRightString(width - 25 * mm, 18 * mm, '龍神湖神社 巫女 拝')
+    c.setFillColor(HexColor("#000000"))
+    c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()

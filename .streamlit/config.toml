@@ -1,0 +1,7 @@
+[server]
+maxUploadSize = 50
+maxMessageSize = 50
+enableXsrfProtection = false
+
+[browser]
+serverAddress = "ai-uranai-h1-155905710900.asia-northeast2.run.app"
