@@ -15,7 +15,6 @@ def render_app_css() -> None:
             color: #1f1f1f !important;
         }
 
-        /* 上部ヘッダーの白帯を消す */
         [data-testid="stHeader"] {
             background: transparent !important;
             box-shadow: none !important;
@@ -39,14 +38,15 @@ def render_app_css() -> None:
             padding-bottom: 3rem;
         }
 
-        /* ===== フォント適用 =====
-           全要素へ一括適用するとアイコンフォントまで壊れるため、
-           テキスト系だけに限定して適用する
-        */
+        /* ===== フォント適用 ===== */
         .title-main,
+        .title-main *,
         .heading-lg,
+        .heading-lg *,
         .label-sm,
+        .label-sm *,
         .input-help,
+        .input-help *,
         p, li, label,
         .stMarkdown, .stMarkdown p, .stMarkdown li, .stMarkdown div,
         .stTextInput input,
@@ -105,43 +105,48 @@ def render_app_css() -> None:
         }
 
         /* ===== 見出し・ラベル ===== */
-        .title-main {
+        .title-main,
+        .title-main * {
             font-size: 1.95rem;
             font-weight: 700;
-            color: #8a3d24;
+            color: #8a3d24 !important;
             margin-top: 0.1rem;
             margin-bottom: 0.3rem;
             line-height: 1.35;
             letter-spacing: 0.02em;
         }
 
-        .heading-lg {
+        .heading-lg,
+        .heading-lg * {
             font-size: 1.22rem;
             font-weight: 700;
-            color: #8a3d24;
+            color: #8a3d24 !important;
             margin-top: 1rem;
             margin-bottom: 0.7rem;
             line-height: 1.5;
         }
 
-        .label-sm {
+        .label-sm,
+        .label-sm * {
             font-size: 0.97rem;
             font-weight: 700;
-            color: #8a3d24;
+            color: #8a3d24 !important;
             margin-bottom: 0.35rem;
             line-height: 1.5;
         }
 
-        .input-help {
+        .input-help,
+        .input-help * {
             font-size: 0.84rem;
-            color: #666666;
+            color: #666666 !important;
             margin-top: 0.22rem;
             margin-bottom: 0.45rem;
             line-height: 1.7;
             font-weight: 500;
         }
 
-        .title-main + .result-body {
+        .title-main + .result-body,
+        .title-main + .result-body * {
             color: #5f5f5f !important;
             font-weight: 500;
         }
@@ -170,7 +175,6 @@ def render_app_css() -> None:
             box-shadow: 0 0 0 1px #c26b4a !important;
         }
 
-        /* selectbox 表示部 */
         div[data-baseweb="select"] span,
         div[data-baseweb="select"] input,
         div[data-baseweb="select"] div {
@@ -290,7 +294,9 @@ def render_app_css() -> None:
 
         /* ===== Expander ===== */
         .streamlit-expanderHeader,
-        [data-testid="stExpander"] summary {
+        .streamlit-expanderHeader *,
+        [data-testid="stExpander"] summary,
+        [data-testid="stExpander"] summary * {
             background: #fffdfa;
             color: #8a3d24 !important;
             border-radius: 10px;
@@ -333,17 +339,19 @@ def render_app_css() -> None:
             box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
         }
 
-        .result-title {
+        .result-title,
+        .result-title * {
             font-size: 1.03rem;
             font-weight: 700;
-            color: #8a3d24;
+            color: #8a3d24 !important;
             margin-bottom: 0.55rem;
             line-height: 1.6;
         }
 
-        .result-body {
+        .result-body,
+        .result-body * {
             line-height: 1.9;
-            color: #2f2f2f;
+            color: #2f2f2f !important;
             font-size: 0.98rem;
             white-space: pre-wrap;
             font-weight: 500;
@@ -365,11 +373,13 @@ def render_app_css() -> None:
                 padding-bottom: 2.4rem;
             }
 
-            .title-main {
+            .title-main,
+            .title-main * {
                 font-size: 1.6rem;
             }
 
-            .heading-lg {
+            .heading-lg,
+            .heading-lg * {
                 font-size: 1.08rem;
             }
 
@@ -377,7 +387,8 @@ def render_app_css() -> None:
                 padding: 14px 14px;
             }
 
-            .result-body {
+            .result-body,
+            .result-body * {
                 font-size: 0.95rem;
                 line-height: 1.85;
             }
