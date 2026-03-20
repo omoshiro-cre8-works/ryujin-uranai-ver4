@@ -6,50 +6,94 @@ def render_app_css() -> None:
         '''
         <style>
         /* ===== 全体テーマ ===== */
-        html, body, [class*="css"] {
-            font-family: "Yu Mincho", "Hiragino Mincho ProN", "Hiragino Mincho Pro",
-                         "YuMincho", "MS PMincho", Georgia, serif !important;
-        }
-
+        body,
         .stApp,
         [data-testid="stAppViewContainer"],
         [data-testid="stMain"],
         [data-testid="stMainBlockContainer"] {
-            background: #ffffff;
-            color: #1f1f1f;
+            background: #ffffff !important;
+            color: #1f1f1f !important;
         }
 
+        /* 上部ヘッダーの白帯を消す */
         [data-testid="stHeader"] {
-            background: rgba(255, 255, 255, 0.92);
+            background: transparent !important;
+            box-shadow: none !important;
         }
 
         [data-testid="stToolbar"] {
-            background: transparent;
+            background: transparent !important;
         }
 
         [data-testid="stDecoration"] {
-            background: transparent;
+            background: transparent !important;
         }
 
         [data-testid="stSidebar"] {
-            background: #ffffff;
+            background: #ffffff !important;
         }
 
         [data-testid="stMainBlockContainer"] {
             max-width: 760px;
-            padding-top: 1.4rem;
+            padding-top: 0.8rem;
             padding-bottom: 3rem;
         }
 
-        .stApp, .stApp *,
-        p, li, div, label, span,
-        h1, h2, h3, h4, h5, h6 {
-            font-family: "Yu Mincho", "Hiragino Mincho ProN", "Hiragino Mincho Pro",
-                         "YuMincho", "MS PMincho", Georgia, serif !important;
+        /* ===== フォント適用 =====
+           全要素へ一括適用するとアイコンフォントまで壊れるため、
+           テキスト系だけに限定して適用する
+        */
+        .title-main,
+        .heading-lg,
+        .label-sm,
+        .input-help,
+        p, li, label,
+        .stMarkdown, .stMarkdown p, .stMarkdown li, .stMarkdown div,
+        .stTextInput input,
+        .stTextArea textarea,
+        .stNumberInput input,
+        .stSelectbox label,
+        .stRadio label,
+        .stCheckbox label,
+        .stButton > button,
+        .stDownloadButton > button,
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] input,
+        div[data-baseweb="base-input"] > div {
+            font-family: "Hiragino Mincho ProN", "Hiragino Mincho Pro",
+                         "Yu Mincho", "YuMincho", "Noto Serif JP",
+                         "MS PMincho", Georgia, serif !important;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        /* アイコンフォントは元に戻す */
+        .material-symbols-rounded,
+        .material-symbols-outlined,
+        .material-icons,
+        [class*="material-symbols"],
+        [class*="material-icons"] {
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
         }
 
         p, li, div, label, span {
             color: #1f1f1f;
+        }
+
+        .stMarkdown p,
+        .stMarkdown li,
+        .stMarkdown div {
+            color: #222222 !important;
+            font-weight: 500;
+            line-height: 1.85;
         }
 
         a {
@@ -65,7 +109,7 @@ def render_app_css() -> None:
             font-size: 1.95rem;
             font-weight: 700;
             color: #8a3d24;
-            margin-top: 0.15rem;
+            margin-top: 0.1rem;
             margin-bottom: 0.3rem;
             line-height: 1.35;
             letter-spacing: 0.02em;
@@ -94,13 +138,15 @@ def render_app_css() -> None:
             margin-top: 0.22rem;
             margin-bottom: 0.45rem;
             line-height: 1.7;
+            font-weight: 500;
         }
 
         .title-main + .result-body {
-            color: #5f5f5f;
+            color: #5f5f5f !important;
+            font-weight: 500;
         }
 
-        /* ===== テキスト入力・各種入力 ===== */
+        /* ===== 入力系 ===== */
         .stTextInput input,
         .stTextArea textarea,
         .stNumberInput input,
@@ -129,6 +175,7 @@ def render_app_css() -> None:
         div[data-baseweb="select"] input,
         div[data-baseweb="select"] div {
             color: #1f1f1f !important;
+            font-weight: 500;
         }
 
         /* selectbox 開いたメニュー */
@@ -143,6 +190,7 @@ def render_app_css() -> None:
         li[role="option"] {
             background: #f2f2f2 !important;
             color: #1f1f1f !important;
+            font-weight: 500 !important;
         }
 
         div[role="option"]:hover,
@@ -157,26 +205,24 @@ def render_app_css() -> None:
             color: #1f1f1f !important;
         }
 
-        /* portal配下のpopover対策 */
         body [data-baseweb="popover"],
-        body [data-baseweb="popover"] * {
+        body [data-baseweb="menu"] {
             background: #f2f2f2 !important;
             color: #1f1f1f !important;
         }
 
-        body [data-baseweb="menu"],
+        body [data-baseweb="popover"] *,
         body [data-baseweb="menu"] * {
-            background: #f2f2f2 !important;
             color: #1f1f1f !important;
         }
 
-        /* radio / checkbox */
         .stRadio label,
         .stCheckbox label {
             color: #1f1f1f !important;
+            font-weight: 500;
         }
 
-        /* file uploader */
+        /* ===== file uploader ===== */
         [data-testid="stFileUploader"] section {
             background: #fffdfa;
             border: 1px dashed #d9c9c1;
@@ -187,6 +233,7 @@ def render_app_css() -> None:
         [data-testid="stFileUploader"] span,
         [data-testid="stFileUploader"] div {
             color: #444444;
+            font-weight: 500;
         }
 
         [data-testid="stFileUploader"] button {
@@ -266,16 +313,14 @@ def render_app_css() -> None:
         [data-testid="stExpanderDetails"] div {
             color: #1f1f1f !important;
             line-height: 1.85;
+            font-weight: 500;
         }
 
-        /* ===== メッセージ ===== */
-        [data-testid="stAlert"] {
-            border-radius: 12px;
-        }
-
+        /* ===== キャプション ===== */
         .stCaption,
         [data-testid="stCaptionContainer"] {
             color: #6c6c6c !important;
+            font-weight: 500;
         }
 
         /* ===== 結果カード ===== */
@@ -301,10 +346,11 @@ def render_app_css() -> None:
             color: #2f2f2f;
             font-size: 0.98rem;
             white-space: pre-wrap;
+            font-weight: 500;
         }
 
         .block-container {
-            padding-top: 1.2rem;
+            padding-top: 1rem;
         }
 
         .element-container {
@@ -313,7 +359,7 @@ def render_app_css() -> None:
 
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
-                padding-top: 1rem;
+                padding-top: 0.8rem;
                 padding-left: 1rem;
                 padding-right: 1rem;
                 padding-bottom: 2.4rem;
