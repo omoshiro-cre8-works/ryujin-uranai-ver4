@@ -34,14 +34,13 @@ def render_app_css() -> None:
             background: #ffffff !important;
         }
 
-        /* ここをさらに増やして、タイトルと巫女画像を下げる */
+        /* PC は現状ほぼ維持 */
         [data-testid="stMainBlockContainer"] {
             max-width: 760px;
             padding-top: 3.1rem !important;
             padding-bottom: 3rem;
         }
 
-        /* 最初のブロックに少しだけ追加余白 */
         [data-testid="stMainBlockContainer"] > div:first-child {
             margin-top: 0.4rem !important;
         }
@@ -370,16 +369,17 @@ def render_app_css() -> None:
             margin-bottom: 0.15rem;
         }
 
+        /* ===== スマホだけさらに下げる ===== */
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
-                padding-top: 2.35rem !important;
+                padding-top: 3.35rem !important;
                 padding-left: 1rem;
                 padding-right: 1rem;
                 padding-bottom: 2.4rem;
             }
 
             [data-testid="stMainBlockContainer"] > div:first-child {
-                margin-top: 0.25rem !important;
+                margin-top: 0.45rem !important;
             }
 
             .stMarkdown div.title-main,
