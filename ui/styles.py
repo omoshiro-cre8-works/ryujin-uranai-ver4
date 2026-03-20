@@ -15,9 +15,9 @@ def render_app_css() -> None:
             color: #1f1f1f !important;
         }
 
-        /* ヘッダーは白に戻す */
+        /* ヘッダーは白 */
         [data-testid="stHeader"] {
-            background: rgba(255, 255, 255, 0.96) !important;
+            background: rgba(255, 255, 255, 0.98) !important;
             box-shadow: none !important;
             border-bottom: 1px solid #f2e7e2 !important;
         }
@@ -34,11 +34,16 @@ def render_app_css() -> None:
             background: #ffffff !important;
         }
 
-        /* タイトルと巫女画像を少し下げる */
+        /* ここをさらに増やして、タイトルと巫女画像を下げる */
         [data-testid="stMainBlockContainer"] {
             max-width: 760px;
-            padding-top: 1.6rem;
+            padding-top: 3.1rem !important;
             padding-bottom: 3rem;
+        }
+
+        /* 最初のブロックに少しだけ追加余白 */
+        [data-testid="stMainBlockContainer"] > div:first-child {
+            margin-top: 0.4rem !important;
         }
 
         /* ===== フォント適用 ===== */
@@ -67,7 +72,6 @@ def render_app_css() -> None:
             text-rendering: optimizeLegibility;
         }
 
-        /* アイコンフォントは元に戻す */
         .material-symbols-rounded,
         .material-symbols-outlined,
         .material-icons,
@@ -103,7 +107,7 @@ def render_app_css() -> None:
             border-color: #eadfd8;
         }
 
-        /* ===== 見出し・ラベル（朱色固定） ===== */
+        /* ===== 見出し・ラベル ===== */
         .stMarkdown div.title-main,
         div.title-main {
             font-size: 1.95rem !important;
@@ -180,7 +184,6 @@ def render_app_css() -> None:
             font-weight: 500;
         }
 
-        /* selectbox 開いたメニュー */
         div[role="listbox"],
         ul[role="listbox"] {
             background: #f2f2f2 !important;
@@ -369,10 +372,14 @@ def render_app_css() -> None:
 
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
-                padding-top: 1.25rem;
+                padding-top: 2.35rem !important;
                 padding-left: 1rem;
                 padding-right: 1rem;
                 padding-bottom: 2.4rem;
+            }
+
+            [data-testid="stMainBlockContainer"] > div:first-child {
+                margin-top: 0.25rem !important;
             }
 
             .stMarkdown div.title-main,
