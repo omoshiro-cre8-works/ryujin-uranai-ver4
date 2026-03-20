@@ -6,11 +6,9 @@ import streamlit as st
 from config import HAND_SIDE_OPTIONS, get_app_passphrase
 
 
-
 def render_form_gap(size: int = 1) -> None:
     for _ in range(max(size, 0)):
         st.markdown('<div style="height:0.35rem"></div>', unsafe_allow_html=True)
-
 
 
 def is_passphrase_ok(passphrase: str) -> bool:
@@ -25,11 +23,12 @@ def is_passphrase_ok(passphrase: str) -> bool:
     return True
 
 
-
 def build_selected_hand_sides(uploaded_files: list[Any]) -> list[str]:
     selections: list[str] = []
     for idx, uploaded_file in enumerate(uploaded_files, start=1):
         st.markdown(f'**画像{idx}: {html.escape(uploaded_file.name)}**')
+        st.image(uploaded_file, caption=uploaded_file.name, width=260)
+
         selected = st.radio(
             f'{uploaded_file.name} の左右',
             HAND_SIDE_OPTIONS[1:],
@@ -37,8 +36,11 @@ def build_selected_hand_sides(uploaded_files: list[Any]) -> list[str]:
             key=f'hand_side_{idx}_{uploaded_file.name}',
         )
         selections.append(selected)
-    return selections
 
+        if idx != len(uploaded_files):
+            st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
+
+    return selections
 
 
 def render_html_box(title: str, body: str) -> None:
