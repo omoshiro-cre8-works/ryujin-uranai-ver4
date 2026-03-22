@@ -20,7 +20,6 @@ from config import (
     MINUTE_OPTIONS,
     SHOW_DEBUG,
     TIME_ACCURACY_OPTIONS,
-    get_app_passphrase,
 )
 from models.schemas import FortuneInput, PalmImageMeta
 from services.fortune_service import build_image_parts, call_gemini_fortune
@@ -32,7 +31,6 @@ from services.validation_service import (
 )
 from ui.components import (
     build_selected_hand_sides,
-    is_passphrase_ok,
     render_form_gap,
     render_html_box,
 )
@@ -63,8 +61,6 @@ def main() -> None:
     render_app_css()
     init_session_state()
 
-    app_passphrase = get_app_passphrase()
-
     # ヘッダー
     header_left, header_right = st.columns([1, 4])
     with header_left:
@@ -82,25 +78,6 @@ def main() -> None:
             f'<div class="result-body" style="margin-bottom:1.2rem;">{html.escape(APP_SUBTITLE)}</div>',
             unsafe_allow_html=True,
         )
-
-    # 合言葉
-    if not app_passphrase:
-        st.error("合言葉が設定されていません。運営者にお問い合わせください。")
-        st.stop()
-
-    st.markdown('<div class="label-sm">合言葉を仰ってください</div>', unsafe_allow_html=True)
-
-    passphrase = st.text_input(
-        "",
-        type="password",
-        placeholder="合言葉を仰ってください",
-        label_visibility="collapsed",
-    )
-
-    if not is_passphrase_ok(passphrase):
-        st.stop()
-
-    render_form_gap(1)
 
     # 注意ボックス
     st.markdown(
