@@ -65,7 +65,11 @@ def main() -> None:
     header_left, header_right = st.columns([1, 4])
     with header_left:
         if os.path.exists(MIKO_IMAGE_PATH):
-            st.image(MIKO_IMAGE_PATH, width=96)
+            try:
+                with open(MIKO_IMAGE_PATH, "rb") as f:
+                    st.image(f.read(), width=96)
+            except Exception:
+                st.caption("miko画像なし")
         else:
             st.caption("miko画像なし")
 
