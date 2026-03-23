@@ -1,10 +1,20 @@
+
 import datetime
 import html
+import json
 import logging
 import os
+import secrets
 import sys
+from pathlib import Path
+from typing import Any
 
 import streamlit as st
+
+try:
+    import stripe
+except ImportError:  # pragma: no cover - デプロイ環境で stripe 未導入時の保険
+    stripe = None
 
 from config import (
     APP_ENV,
@@ -36,6 +46,19 @@ from ui.components import (
 )
 from ui.styles import render_app_css
 
+APP_BASE_URL = os.getenv(
+    "APP_BASE_URL",
+    "https://ai-uranai-h1-155905710900.asia-northeast2.run.app",
+).rstrip("/")
+WIX_CANCEL_URL = os.getenv(
+    "WIX_CANCEL_URL",
+    "https://www.omoshiro-cre8works.com/ai-uranai",
+)
+PURCHASE_STORE_PATH = Path(os.getenv("PURCHASE_STORE_PATH", "/tmp/stripe_purchases.json"))
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
+
 
 def configure_logging() -> None:
     level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
@@ -51,17 +74,314 @@ def init_session_state() -> None:
         st.session_state.fortune_json = None
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
+    if "active_purchase_id" not in st.session_state:
+        st.session_state.active_purchase_id = None
+    if "checkout_url" not in st.session_state:
+        st.session_state.checkout_url = None
 
 
-def main() -> None:
-    configure_logging()
-    logger = logging.getLogger(__name__)
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
 
-    st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
-    render_app_css()
-    init_session_state()
 
-    # ヘッダー
+def utc_now_iso() -> str:
+    return utc_now().isoformat()
+
+
+def token_expires_at_iso(hours: int = 24) -> str:
+    return (utc_now() + datetime.timedelta(hours=hours)).isoformat()
+
+
+def ensure_purchase_store() -> None:
+    PURCHASE_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not PURCHASE_STORE_PATH.exists():
+        PURCHASE_STORE_PATH.write_text("{}", encoding="utf-8")
+
+
+def load_purchase_store() -> dict[str, Any]:
+    ensure_purchase_store()
+    try:
+        return json.loads(PURCHASE_STORE_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_purchase_store(data: dict[str, Any]) -> None:
+    ensure_purchase_store()
+    PURCHASE_STORE_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def create_purchase_record() -> dict[str, Any]:
+    purchase_id = f"p_{utc_now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(6)}"
+    access_token = secrets.token_urlsafe(24)
+    record = {
+        "purchase_id": purchase_id,
+        "stripe_checkout_session_id": None,
+        "payment_status": "pending",
+        "used_flag": False,
+        "used_at": None,
+        "access_token": access_token,
+        "token_expires_at": token_expires_at_iso(),
+        "stripe_event_id": None,
+        "created_at": utc_now_iso(),
+        "updated_at": utc_now_iso(),
+        "amount_total": None,
+        "currency": "jpy",
+        "checkout_completed_at": None,
+        "app_version": APP_ENV,
+    }
+    store = load_purchase_store()
+    store[purchase_id] = record
+    save_purchase_store(store)
+    return record
+
+
+def get_purchase_record(purchase_id: str | None) -> dict[str, Any] | None:
+    if not purchase_id:
+        return None
+    store = load_purchase_store()
+    return store.get(purchase_id)
+
+
+def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] | None:
+    store = load_purchase_store()
+    record = store.get(purchase_id)
+    if not record:
+        return None
+    record.update(updates)
+    record["updated_at"] = utc_now_iso()
+    store[purchase_id] = record
+    save_purchase_store(store)
+    return record
+
+
+def is_token_valid(record: dict[str, Any] | None) -> bool:
+    if not record:
+        return False
+    token_expires_at = record.get("token_expires_at")
+    if not token_expires_at:
+        return False
+    try:
+        expires_at = datetime.datetime.fromisoformat(token_expires_at)
+    except ValueError:
+        return False
+    return expires_at > utc_now()
+
+
+def is_purchase_ready(record: dict[str, Any] | None) -> bool:
+    return bool(
+        record
+        and record.get("payment_status") == "paid"
+        and not record.get("used_flag")
+        and is_token_valid(record)
+    )
+
+
+def stripe_client_ready() -> bool:
+    if not STRIPE_ENABLED:
+        return False
+    assert stripe is not None
+    stripe.api_key = STRIPE_SECRET_KEY
+    return True
+
+
+def create_checkout_session(logger: logging.Logger) -> tuple[str | None, str | None]:
+    if not stripe_client_ready():
+        return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID を確認してください。"
+
+    record = create_purchase_record()
+    purchase_id = record["purchase_id"]
+
+    try:
+        assert stripe is not None
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[
+                {
+                    "price": STRIPE_PRICE_ID,
+                    "quantity": 1,
+                }
+            ],
+            success_url=f"{APP_BASE_URL}/?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=WIX_CANCEL_URL,
+            client_reference_id=purchase_id,
+            metadata={"purchase_id": purchase_id},
+        )
+        update_purchase_record(
+            purchase_id,
+            stripe_checkout_session_id=session.id,
+        )
+        st.session_state.active_purchase_id = purchase_id
+        st.session_state.checkout_url = session.url
+        logger.info(
+            "checkout_session_created",
+            extra={
+                "env": APP_ENV,
+                "purchase_id": purchase_id,
+                "stripe_checkout_session_id": session.id,
+            },
+        )
+        return session.url, None
+    except Exception as exc:  # pragma: no cover - 外部API例外
+        logger.exception("checkout_session_create_failed")
+        return None, f"Stripe Checkout の準備に失敗しました: {exc}"
+
+
+def retrieve_checkout_session(session_id: str) -> Any | None:
+    if not session_id or not stripe_client_ready():
+        return None
+    try:
+        assert stripe is not None
+        return stripe.checkout.Session.retrieve(session_id)
+    except Exception:
+        return None
+
+
+def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[str, Any] | None:
+    session = retrieve_checkout_session(session_id)
+    if not session:
+        return None
+
+    purchase_id = None
+    metadata = getattr(session, "metadata", None) or {}
+    if isinstance(metadata, dict):
+        purchase_id = metadata.get("purchase_id")
+    if not purchase_id:
+        purchase_id = getattr(session, "client_reference_id", None)
+
+    if not purchase_id:
+        return None
+
+    payment_status = getattr(session, "payment_status", None)
+    status = getattr(session, "status", None)
+
+    if payment_status != "paid" and status != "complete":
+        return get_purchase_record(purchase_id)
+
+    amount_total = getattr(session, "amount_total", None)
+    currency = getattr(session, "currency", None)
+
+    record = update_purchase_record(
+        purchase_id,
+        payment_status="paid",
+        stripe_checkout_session_id=getattr(session, "id", None),
+        amount_total=amount_total,
+        currency=currency,
+        checkout_completed_at=utc_now_iso(),
+    )
+    if record:
+        st.session_state.active_purchase_id = purchase_id
+        logger.info(
+            "checkout_session_paid_synced",
+            extra={
+                "env": APP_ENV,
+                "purchase_id": purchase_id,
+                "stripe_checkout_session_id": getattr(session, "id", None),
+            },
+        )
+    return record
+
+
+def consume_purchase(purchase_id: str, logger: logging.Logger) -> None:
+    record = get_purchase_record(purchase_id)
+    if not is_purchase_ready(record):
+        return
+    update_purchase_record(
+        purchase_id,
+        used_flag=True,
+        used_at=utc_now_iso(),
+    )
+    logger.info(
+        "purchase_consumed",
+        extra={
+            "env": APP_ENV,
+            "purchase_id": purchase_id,
+        },
+    )
+
+
+def get_current_purchase_record() -> dict[str, Any] | None:
+    session_id = st.query_params.get("session_id")
+    if session_id:
+        return sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
+    active_purchase_id = st.session_state.get("active_purchase_id")
+    return get_purchase_record(active_purchase_id)
+
+
+def render_checkout_link(checkout_url: str) -> None:
+    st.markdown(
+        f'''
+        <a href="{html.escape(checkout_url, quote=True)}" target="_self" style="text-decoration:none;">
+            <div style="
+                display:inline-block;
+                padding:0.85rem 1.25rem;
+                border-radius:999px;
+                background:#b14d2c;
+                color:#ffffff;
+                font-weight:700;
+                text-align:center;
+                margin-top:0.5rem;
+                margin-bottom:0.2rem;
+            ">
+                Stripe の決済画面へ進む
+            </div>
+        </a>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
+    st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
+    st.markdown(
+        '''
+        <div style="border:1px solid #e5d7d1; background:#fffdfa; border-radius:14px; padding:14px 16px; margin:0.3rem 0 1rem 0; color:#3b312d;">
+            <div style="font-weight:700; margin-bottom:0.45rem;">有料版のご利用について</div>
+            <div style="margin-bottom:0.25rem;">・本サービスは <strong>1回 300円</strong> の単発課金です。</div>
+            <div style="margin-bottom:0.25rem;">・決済完了後、この画面に戻ると鑑定フォームが表示されます。</div>
+            <div>・1回の購入につき、鑑定の実行は1回のみです。</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    if not STRIPE_ENABLED:
+        st.error("Stripe の設定がまだ反映されていません。Cloud Run の環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID を設定してください。")
+        if SHOW_DEBUG:
+            st.caption(f"APP_BASE_URL={APP_BASE_URL} / WIX_CANCEL_URL={WIX_CANCEL_URL}")
+        return None
+
+    record = get_current_purchase_record()
+
+    if is_purchase_ready(record):
+        st.success("決済確認が完了しました。鑑定フォームをご利用いただけます。")
+        return record
+
+    session_id = st.query_params.get("session_id")
+    if session_id and record and record.get("payment_status") != "paid":
+        st.info("決済結果を確認中です。数秒後に再読み込みしてください。")
+
+    if record and record.get("used_flag"):
+        st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
+
+    if st.button("💳 300円でお告げを受ける"):
+        checkout_url, error_message = create_checkout_session(logger)
+        if error_message:
+            st.error(error_message)
+        elif checkout_url:
+            st.success("決済ページの準備ができました。下のボタンから Stripe Checkout へ進んでください。")
+            render_checkout_link(checkout_url)
+
+    if st.session_state.get("checkout_url"):
+        render_checkout_link(st.session_state["checkout_url"])
+
+    return None
+
+
+def render_header() -> None:
     header_left, header_right = st.columns([1, 4])
     with header_left:
         if os.path.exists(MIKO_IMAGE_PATH):
@@ -83,22 +403,25 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    # 注意ボックス
+
+def render_notice_box() -> None:
     st.markdown(
-        """
+        '''
         <div style="border:1px solid #d98b73; background:#fff7f4; border-radius:14px; padding:14px 16px; margin:0.4rem 0 1rem 0; color:#3b312d;">
             <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
             <div style="margin-bottom:0.25rem; color:#3b312d;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
             <div style="margin-bottom:0.25rem; color:#3b312d;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
             <div style="color:#3b312d;">・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
         </div>
-        """,
+        ''',
         unsafe_allow_html=True,
     )
 
+
+def render_pre_info() -> None:
     with st.expander("ご利用前のご案内", expanded=False):
         st.markdown(
-            """**この鑑定について**  
+            '''**この鑑定について**  
 本アプリの鑑定結果は、参考情報としてお楽しみいただくためのものです。結果の正確性や、未来の出来事の実現を保証するものではありません。
 
 **免責事項**  
@@ -106,15 +429,16 @@ def main() -> None:
 
 **個人情報の取り扱い**  
 ご入力いただいた氏名、生年月日、出生地、手相画像などの情報は、鑑定結果の生成確認のために一時的に使用します。
-"""
+'''
         )
 
+
+def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger) -> None:
     st.caption("本アプリの鑑定は参考情報としてお楽しみください。")
 
     render_form_gap(2)
     st.markdown('<div class="heading-lg">📋 鑑定の準備</div>', unsafe_allow_html=True)
 
-    # 氏名
     st.markdown('<div class="label-sm">氏名（漢字）</div>', unsafe_allow_html=True)
     last_col, first_col = st.columns(2)
     with last_col:
@@ -125,7 +449,6 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # 生年月日
     st.markdown('<div class="label-sm">生年月日</div>', unsafe_allow_html=True)
     today = datetime.date.today()
     year_options = ["年を選択"] + list(range(today.year, 1899, -1))
@@ -155,7 +478,6 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # 出生時刻
     st.markdown('<div class="label-sm">出生時刻</div>', unsafe_allow_html=True)
     st.caption("出生時刻が不明でも鑑定できます。分かる範囲に応じてお選びください。")
     birth_time_accuracy = st.radio(
@@ -180,13 +502,11 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # 出生地
     st.markdown('<div class="label-sm">出生地</div>', unsafe_allow_html=True)
     birth_place = st.text_input("出生地", placeholder="東京都")
 
     render_form_gap(2)
 
-    # 相談カテゴリ
     st.markdown('<div class="label-sm">相談カテゴリ</div>', unsafe_allow_html=True)
     st.caption("今いちばん知りたいことを中心に、1〜3個お選びください。")
     category_options_with_blank = ["（未選択）"] + CATEGORY_OPTIONS
@@ -207,7 +527,6 @@ def main() -> None:
 
     render_form_gap(1)
 
-    # 補足
     st.markdown('<div class="label-sm">特に重視したいことの補足</div>', unsafe_allow_html=True)
     concern_detail = st.text_area(
         "特に重視したいことの補足",
@@ -217,7 +536,6 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # 画像アップロード
     st.markdown('<div class="label-sm">手相の写真</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="input-help">手のひら全体が見える、明るくぶれの少ない写真をお選びください。画像は最大{MAX_IMAGE_FILES}枚までです。</div>',
@@ -237,8 +555,12 @@ def main() -> None:
 
     render_form_gap(2)
 
-    # Gemini 呼び出し
     if st.button("🐉 龍神さまのお告げを聞く"):
+        record = get_purchase_record(active_purchase.get("purchase_id"))
+        if not is_purchase_ready(record):
+            st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+            st.stop()
+
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,
@@ -284,14 +606,17 @@ def main() -> None:
                 with st.spinner("龍神さまが降臨されています..."):
                     result = call_gemini_fortune(payload)
 
+                consume_purchase(active_purchase["purchase_id"], logger)
+
                 st.session_state.fortune_json = result
                 st.session_state.user_name = payload.user_name
 
-                st.success("お告げを授かりました。")
+                st.success("お告げを授かりました。今回の購入分は使用済みになりました。")
                 logger.info(
                     "fortune_completed",
                     extra={
                         "env": APP_ENV,
+                        "purchase_id": active_purchase["purchase_id"],
                         "category_count": len(categories),
                         "image_count": len(image_parts),
                     },
@@ -301,7 +626,6 @@ def main() -> None:
                 logger.exception("fortune_failed")
                 st.error(f"鑑定中に支障が生じました: {exc}")
 
-    # 結果表示 + PDF出力
     data = st.session_state.fortune_json
     if data:
         render_form_gap(2)
@@ -359,8 +683,33 @@ def main() -> None:
                     f'- 手相画像枚数: {len(uploaded_files or [])}\n'
                     f'- 相談カテゴリ: {", ".join(categories) if categories else "なし"}\n'
                     f'- 出生時刻の精度: {birth_time_accuracy}\n'
-                    '- 入力データはセッション内のみで扱い、履歴保存は行わない設計です。'
+                    f'- 購入ID: {active_purchase.get("purchase_id")}\n'
+                    f'- 決済状態: {active_purchase.get("payment_status")}\n'
+                    '- 入力データはセッション内のみで扱い、決済制御用の最小情報のみ /tmp に保存する設計です。'
                 )
+
+
+def main() -> None:
+    configure_logging()
+    logger = logging.getLogger(__name__)
+
+    st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
+    render_app_css()
+    init_session_state()
+
+    render_header()
+    render_notice_box()
+    render_pre_info()
+
+    active_purchase = render_payment_section(logger)
+    render_form_gap(2)
+
+    if active_purchase:
+        render_fortune_form(active_purchase, logger)
+    else:
+        st.info("まずは上のボタンから決済を完了すると、鑑定フォームが表示されます。")
+        st.divider()
+        return
 
     st.divider()
 
