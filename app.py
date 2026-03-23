@@ -1,3 +1,4 @@
+
 import datetime
 import html
 import json
@@ -333,34 +334,6 @@ def render_checkout_link(checkout_url: str) -> None:
     )
 
 
-def render_completion_screen() -> None:
-    image_col_left, image_col_center, image_col_right = st.columns([1, 1.2, 1])
-    with image_col_center:
-        if os.path.exists(MIKO_IMAGE_PATH):
-            try:
-                with open(MIKO_IMAGE_PATH, "rb") as f:
-                    st.image(f.read(), width=170)
-            except Exception:
-                st.caption("miko画像なし")
-        else:
-            st.caption("miko画像なし")
-
-    st.markdown(
-        '''
-        <div style="text-align:center; margin-top:0.4rem; margin-bottom:1.4rem;">
-            <div style="font-size:1.5rem; font-weight:700; color:#b14d2c; margin-bottom:0.7rem;">
-                龍神さまのお告げは完了しました
-            </div>
-            <div style="font-size:1rem; line-height:1.9; color:#3b312d;">
-                ご利用ありがとうございました。<br>
-                また鑑定をご希望の場合は、あらためて決済のうえ、ご利用をお願いします。
-            </div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
-
-
 def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
     st.markdown(
@@ -392,7 +365,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
         st.info("決済結果を確認中です。数秒後に再読み込みしてください。")
 
     if record and record.get("used_flag"):
-        return record
+        st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
 
     if st.button("💳 300円でお告げを受ける"):
         checkout_url, error_message = create_checkout_session(logger)
@@ -400,6 +373,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
             st.error(error_message)
         elif checkout_url:
             st.success("決済ページの準備ができました。下のボタンから Stripe Checkout へ進んでください。")
+            render_checkout_link(checkout_url)
 
     if st.session_state.get("checkout_url"):
         render_checkout_link(st.session_state["checkout_url"])
@@ -722,6 +696,11 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
     init_session_state()
+
+    active_purchase = get_current_purchase_record()
+    if active_purchase and active_purchase.get("used_flag"):
+        render_completion_screen()
+        st.stop()
 
     render_header()
     render_notice_box()
