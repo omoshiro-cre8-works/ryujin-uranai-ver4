@@ -373,7 +373,6 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
             st.error(error_message)
         elif checkout_url:
             st.success("決済ページの準備ができました。下のボタンから Stripe Checkout へ進んでください。")
-            render_checkout_link(checkout_url)
 
     if st.session_state.get("checkout_url"):
         render_checkout_link(st.session_state["checkout_url"])
@@ -711,6 +710,7 @@ def main() -> None:
 
     if active_purchase and active_purchase.get("used_flag"):
         render_completion_screen()
+        st.stop()
     elif active_purchase:
         render_fortune_form(active_purchase, logger)
     else:
