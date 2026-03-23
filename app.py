@@ -380,6 +380,41 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     return None
 
 
+
+
+def render_completion_screen() -> None:
+    top_url = WIX_CANCEL_URL or "https://www.omoshiro-cre8works.com/ai-uranai"
+    render_form_gap(2)
+    left, center, right = st.columns([1, 1.4, 1])
+    with center:
+        st.image(str(MIKO_IMAGE_PATH), use_container_width=True)
+
+    st.markdown(
+        """
+        <h2 style="text-align:center; color:#8B4513; margin-top:0.8rem;">
+            龍神さまのお告げは完了しました
+        </h2>
+        <p style="text-align:center; line-height:1.9; margin-top:0.6rem;">
+            ご利用ありがとうございました。<br>
+            また鑑定をご希望の場合は、あらためて決済のうえ、ご利用をお願いします。
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div style="text-align:center; margin-top:1.5rem;">
+            <a href="{html.escape(top_url, quote=True)}" target="_self"
+               style="display:inline-block; background:#b6552d; color:white; padding:0.8rem 1.4rem;
+                      border-radius:999px; text-decoration:none; font-weight:600;">
+                『龍神さまのお告げ』トップに戻る
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def render_header() -> None:
     header_left, header_right = st.columns([1, 4])
     with header_left:
