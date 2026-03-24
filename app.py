@@ -1,12 +1,10 @@
 
 import datetime
 import html
-import json
 import logging
 import os
 import secrets
 import sys
-from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -32,6 +30,10 @@ from config import (
     TIME_ACCURACY_OPTIONS,
 )
 from models.schemas import FortuneInput, PalmImageMeta
+from services.firestore_service import (
+    create_purchase_record as firestore_create_purchase_record,
+    get_firestore_client,
+)
 from services.fortune_service import build_image_parts, call_gemini_fortune
 from services.pdf_service import generate_miko_letter_pdf
 from services.validation_service import (
@@ -54,7 +56,6 @@ WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
     "https://www.omoshiro-cre8works.com/ai-uranai",
 )
-PURCHASE_STORE_PATH = Path(os.getenv("PURCHASE_STORE_PATH", "/tmp/stripe_purchases.json"))
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
@@ -84,78 +85,61 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def utc_now_iso() -> str:
-    return utc_now().isoformat()
+def token_expires_at_datetime(hours: int = 24) -> datetime.datetime:
+    return utc_now() + datetime.timedelta(hours=hours)
 
 
-def token_expires_at_iso(hours: int = 24) -> str:
-    return (utc_now() + datetime.timedelta(hours=hours)).isoformat()
-
-
-def ensure_purchase_store() -> None:
-    PURCHASE_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not PURCHASE_STORE_PATH.exists():
-        PURCHASE_STORE_PATH.write_text("{}", encoding="utf-8")
-
-
-def load_purchase_store() -> dict[str, Any]:
-    ensure_purchase_store()
-    try:
-        return json.loads(PURCHASE_STORE_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def save_purchase_store(data: dict[str, Any]) -> None:
-    ensure_purchase_store()
-    PURCHASE_STORE_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+def _purchase_doc_ref(purchase_id: str):
+    db = get_firestore_client()
+    return db.collection("purchases").document(purchase_id)
 
 
 def create_purchase_record() -> dict[str, Any]:
     purchase_id = f"p_{utc_now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(6)}"
     access_token = secrets.token_urlsafe(24)
-    record = {
-        "purchase_id": purchase_id,
-        "stripe_checkout_session_id": None,
-        "payment_status": "pending",
-        "used_flag": False,
-        "used_at": None,
-        "access_token": access_token,
-        "token_expires_at": token_expires_at_iso(),
-        "stripe_event_id": None,
-        "created_at": utc_now_iso(),
-        "updated_at": utc_now_iso(),
-        "amount_total": None,
-        "currency": "jpy",
-        "checkout_completed_at": None,
-        "app_version": APP_ENV,
-    }
-    store = load_purchase_store()
-    store[purchase_id] = record
-    save_purchase_store(store)
-    return record
+    token_expires_at = token_expires_at_datetime()
+
+    firestore_create_purchase_record(
+        purchase_id=purchase_id,
+        stripe_checkout_session_id="pending_checkout_session",
+        access_token=access_token,
+        token_expires_at=token_expires_at,
+        amount_jpy=300,
+        currency="jpy",
+        source="wix_lp",
+    )
+
+    record = update_purchase_record(
+        purchase_id,
+        stripe_checkout_session_id=None,
+        amount_total=None,
+        checkout_completed_at=None,
+        app_version=APP_ENV,
+    )
+    return record or {}
 
 
 def get_purchase_record(purchase_id: str | None) -> dict[str, Any] | None:
     if not purchase_id:
         return None
-    store = load_purchase_store()
-    return store.get(purchase_id)
+
+    snapshot = _purchase_doc_ref(purchase_id).get()
+    if not snapshot.exists:
+        return None
+
+    return snapshot.to_dict() or {}
 
 
 def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] | None:
-    store = load_purchase_store()
-    record = store.get(purchase_id)
-    if not record:
+    snapshot = _purchase_doc_ref(purchase_id).get()
+    if not snapshot.exists:
         return None
-    record.update(updates)
-    record["updated_at"] = utc_now_iso()
-    store[purchase_id] = record
-    save_purchase_store(store)
-    return record
+
+    updates["updated_at"] = utc_now()
+    _purchase_doc_ref(purchase_id).update(updates)
+
+    refreshed = _purchase_doc_ref(purchase_id).get()
+    return refreshed.to_dict() if refreshed.exists else None
 
 
 def is_token_valid(record: dict[str, Any] | None) -> bool:
@@ -164,10 +148,18 @@ def is_token_valid(record: dict[str, Any] | None) -> bool:
     token_expires_at = record.get("token_expires_at")
     if not token_expires_at:
         return False
-    try:
-        expires_at = datetime.datetime.fromisoformat(token_expires_at)
-    except ValueError:
-        return False
+
+    if isinstance(token_expires_at, str):
+        try:
+            expires_at = datetime.datetime.fromisoformat(token_expires_at)
+        except ValueError:
+            return False
+    else:
+        expires_at = token_expires_at
+
+    if getattr(expires_at, "tzinfo", None) is None:
+        expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+
     return expires_at > utc_now()
 
 
@@ -270,7 +262,7 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
         stripe_checkout_session_id=getattr(session, "id", None),
         amount_total=amount_total,
         currency=currency,
-        checkout_completed_at=utc_now_iso(),
+        checkout_completed_at=utc_now(),
     )
     if record:
         st.session_state.active_purchase_id = purchase_id
@@ -292,7 +284,7 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> None:
     update_purchase_record(
         purchase_id,
         used_flag=True,
-        used_at=utc_now_iso(),
+        used_at=utc_now(),
     )
     logger.info(
         "purchase_consumed",
@@ -445,7 +437,7 @@ def render_notice_box() -> None:
             <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
             <div style="margin-bottom:0.25rem; color:#3b312d;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
             <div style="margin-bottom:0.25rem; color:#3b312d;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
-            <div style="color:#3b312d;">・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この検証版では履歴保存を行いません。</div>
+            <div style="color:#3b312d;">・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この版では決済制御用の最小情報のみ Firestore に保存します。</div>
         </div>
         ''',
         unsafe_allow_html=True,
@@ -719,7 +711,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                     f'- 出生時刻の精度: {birth_time_accuracy}\n'
                     f'- 購入ID: {active_purchase.get("purchase_id")}\n'
                     f'- 決済状態: {active_purchase.get("payment_status")}\n'
-                    '- 入力データはセッション内のみで扱い、決済制御用の最小情報のみ /tmp に保存する設計です。'
+                    '- 入力データはセッション内のみで扱い、決済制御用の最小情報のみ Firestore に保存する設計です。'
                 )
 
 
