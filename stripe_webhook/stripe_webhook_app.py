@@ -88,13 +88,19 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
         )
         return False
 
+    amount_total = session.get("amount_total")
+    currency = session.get("currency")
+    amount_jpy = amount_total if currency == "jpy" and isinstance(amount_total, int) else None
+
     update_purchase_record(
         purchase_id,
         payment_status="paid",
         stripe_checkout_session_id=session.get("id"),
         stripe_event_id=event_id,
-        amount_total=session.get("amount_total"),
-        currency=session.get("currency"),
+        price_id=metadata.get("price_id"),
+        amount_jpy=amount_jpy,
+        amount_total=amount_total,
+        currency=currency,
         checkout_completed_at=utc_now(),
         webhook_confirmed_at=utc_now(),
     )

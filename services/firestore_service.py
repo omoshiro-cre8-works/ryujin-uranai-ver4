@@ -29,6 +29,7 @@ def create_purchase_record(
     stripe_checkout_session_id: str,
     access_token: str,
     token_expires_at: datetime,
+    price_id: Optional[str] = None,
     amount_jpy: int = 300,
     currency: str = "jpy",
     source: str = "wix_lp",
@@ -41,6 +42,7 @@ def create_purchase_record(
         stripe_checkout_session_id: Stripe Checkout Session ID
         access_token: 決済後アクセス用トークン
         token_expires_at: トークン有効期限（UTC datetime）
+        price_id: Stripe Price ID
         amount_jpy: 金額（既定 300）
         currency: 通貨（既定 jpy）
         source: 流入元や購入元の識別子
@@ -62,6 +64,7 @@ def create_purchase_record(
         "used_at": None,
         "access_token": access_token,
         "token_expires_at": token_expires_at,
+        "price_id": price_id,
         "amount_jpy": amount_jpy,
         "currency": currency,
         "source": source,

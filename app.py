@@ -6,6 +6,7 @@ import os
 import secrets
 import sys
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -57,8 +58,13 @@ WIX_CANCEL_URL = os.getenv(
     "https://www.omoshiro-cre8works.com/ai-uranai",
 )
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
-STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
+STRIPE_PRICE_ID_REGULAR = os.getenv("STRIPE_PRICE_ID_REGULAR", os.getenv("STRIPE_PRICE_ID", ""))
+STRIPE_PRICE_ID_CAMPAIGN = os.getenv("STRIPE_PRICE_ID_CAMPAIGN", "")
+CAMPAIGN_END_AT = os.getenv("CAMPAIGN_END_AT", "").strip()
+CAMPAIGN_TIMEZONE = os.getenv("CAMPAIGN_TIMEZONE", "Asia/Tokyo").strip() or "Asia/Tokyo"
+REGULAR_AMOUNT_JPY = 300
+CAMPAIGN_AMOUNT_JPY = 100
+STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
 
 
 def configure_logging() -> None:
@@ -89,12 +95,51 @@ def token_expires_at_datetime(hours: int = 24) -> datetime.datetime:
     return utc_now() + datetime.timedelta(hours=hours)
 
 
+def parse_campaign_end_at(logger: logging.Logger | None = None) -> datetime.datetime | None:
+    if not CAMPAIGN_END_AT:
+        return None
+
+    normalized_value = CAMPAIGN_END_AT.replace("Z", "+00:00")
+    try:
+        campaign_end_at = datetime.datetime.fromisoformat(normalized_value)
+    except ValueError:
+        if logger:
+            logger.warning("campaign_end_at_invalid_format")
+        return None
+
+    if campaign_end_at.tzinfo is not None:
+        return campaign_end_at
+
+    try:
+        campaign_tz = ZoneInfo(CAMPAIGN_TIMEZONE)
+    except Exception:
+        if logger:
+            logger.warning("campaign_timezone_invalid")
+        return None
+
+    return campaign_end_at.replace(tzinfo=campaign_tz)
+
+
+def get_active_checkout_price(logger: logging.Logger | None = None) -> tuple[str, int]:
+    if not STRIPE_PRICE_ID_CAMPAIGN or not CAMPAIGN_END_AT:
+        return STRIPE_PRICE_ID_REGULAR, REGULAR_AMOUNT_JPY
+
+    campaign_end_at = parse_campaign_end_at(logger)
+    if campaign_end_at is None:
+        return STRIPE_PRICE_ID_REGULAR, REGULAR_AMOUNT_JPY
+
+    if utc_now() < campaign_end_at.astimezone(datetime.timezone.utc):
+        return STRIPE_PRICE_ID_CAMPAIGN, CAMPAIGN_AMOUNT_JPY
+
+    return STRIPE_PRICE_ID_REGULAR, REGULAR_AMOUNT_JPY
+
+
 def _purchase_doc_ref(purchase_id: str):
     db = get_firestore_client()
     return db.collection("purchases").document(purchase_id)
 
 
-def create_purchase_record() -> dict[str, Any]:
+def create_purchase_record(price_id: str, amount_jpy: int) -> dict[str, Any]:
     purchase_id = f"p_{utc_now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(6)}"
     access_token = secrets.token_urlsafe(24)
     token_expires_at = token_expires_at_datetime()
@@ -104,7 +149,8 @@ def create_purchase_record() -> dict[str, Any]:
         stripe_checkout_session_id="pending_checkout_session",
         access_token=access_token,
         token_expires_at=token_expires_at,
-        amount_jpy=300,
+        price_id=price_id,
+        amount_jpy=amount_jpy,
         currency="jpy",
         source="wix_lp",
     )
@@ -182,9 +228,10 @@ def stripe_client_ready() -> bool:
 
 def create_checkout_session(logger: logging.Logger) -> tuple[str | None, str | None]:
     if not stripe_client_ready():
-        return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID を確認してください。"
+        return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を確認してください。"
 
-    record = create_purchase_record()
+    active_price_id, active_amount_jpy = get_active_checkout_price(logger)
+    record = create_purchase_record(active_price_id, active_amount_jpy)
     purchase_id = record["purchase_id"]
 
     try:
@@ -193,14 +240,18 @@ def create_checkout_session(logger: logging.Logger) -> tuple[str | None, str | N
             mode="payment",
             line_items=[
                 {
-                    "price": STRIPE_PRICE_ID,
+                    "price": active_price_id,
                     "quantity": 1,
                 }
             ],
             success_url=f"{APP_BASE_URL}/?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=WIX_CANCEL_URL,
             client_reference_id=purchase_id,
-            metadata={"purchase_id": purchase_id},
+            metadata={
+                "purchase_id": purchase_id,
+                "price_id": active_price_id,
+                "amount_jpy": str(active_amount_jpy),
+            },
         )
         update_purchase_record(
             purchase_id,
@@ -255,11 +306,17 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
 
     amount_total = getattr(session, "amount_total", None)
     currency = getattr(session, "currency", None)
+    metadata = getattr(session, "metadata", None) or {}
+
+    amount_jpy = amount_total if currency == "jpy" and isinstance(amount_total, int) else None
+    price_id = metadata.get("price_id") if isinstance(metadata, dict) else None
 
     record = update_purchase_record(
         purchase_id,
         payment_status="paid",
         stripe_checkout_session_id=getattr(session, "id", None),
+        price_id=price_id,
+        amount_jpy=amount_jpy,
         amount_total=amount_total,
         currency=currency,
         checkout_completed_at=utc_now(),
@@ -327,12 +384,13 @@ def render_checkout_link(checkout_url: str) -> None:
 
 
 def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
+    _, active_amount_jpy = get_active_checkout_price(logger)
     st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
     st.markdown(
-        '''
+        f'''
         <div style="border:1px solid #e5d7d1; background:#fffdfa; border-radius:14px; padding:14px 16px; margin:0.3rem 0 1rem 0; color:#3b312d;">
             <div style="font-weight:700; margin-bottom:0.45rem;">有料版のご利用について</div>
-            <div style="margin-bottom:0.25rem;">・本サービスは <strong>1回 300円</strong> の単発課金です。</div>
+            <div style="margin-bottom:0.25rem;">・本サービスは <strong>1回 {active_amount_jpy}円</strong> の単発課金です。</div>
             <div style="margin-bottom:0.25rem;">・決済完了後、この画面に戻ると鑑定フォームが表示されます。</div>
             <div>・1回の購入につき、鑑定の実行は1回のみです。</div>
         </div>
@@ -341,7 +399,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     )
 
     if not STRIPE_ENABLED:
-        st.error("Stripe の設定がまだ反映されていません。Cloud Run の環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID を設定してください。")
+        st.error("Stripe の設定がまだ反映されていません。Cloud Run の環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を設定してください。")
         if SHOW_DEBUG:
             st.caption(f"APP_BASE_URL={APP_BASE_URL} / WIX_CANCEL_URL={WIX_CANCEL_URL}")
         return None
@@ -359,7 +417,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     if record and record.get("used_flag"):
         st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
 
-    if st.button("💳 300円でお告げを受ける"):
+    if st.button(f"💳 {active_amount_jpy}円でお告げを受ける"):
         checkout_url, error_message = create_checkout_session(logger)
         if error_message:
             st.error(error_message)
