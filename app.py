@@ -470,8 +470,7 @@ def render_header() -> None:
     with header_left:
         if os.path.exists(MIKO_IMAGE_PATH):
             try:
-                with open(MIKO_IMAGE_PATH, "rb") as f:
-                    st.image(f.read(), width=96)
+                st.image(str(MIKO_IMAGE_PATH), width=96)
             except Exception:
                 st.caption("miko画像なし")
         else:
