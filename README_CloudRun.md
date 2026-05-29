@@ -37,7 +37,23 @@
 - concurrency: 1
 - timeout: 600
 - min instances: 0
-- max instances: 3
+- max instances: 1
+
+Streamlit はセッションやアップロード中のファイル状態をインスタンス内に保持します。
+Cloud Run で複数インスタンスに分散されると、画面表示を処理したインスタンスと
+`/_stcore/upload_file/...` の PUT を処理するインスタンスがずれ、ファイル選択直後に
+400 が返ることがあります。まず本体サービスは最大インスタンス数を 1 にしてください。
+
+```powershell
+gcloud run services update ai-uranai-h1 `
+  --region=asia-northeast2 `
+  --max=1
+```
+
+デプロイ時に revision 単位で指定する場合は `--max-instances=1` を使います。
+
+Session Affinity は緩和策として使えますが、Cloud Run では常に同じインスタンスへ
+送られる保証まではないため、このアプリではまず最大インスタンス数 1 を優先します。
 
 ## メモ
 - Secret は Cloud Run の環境変数または Secret Manager から注入してください。
