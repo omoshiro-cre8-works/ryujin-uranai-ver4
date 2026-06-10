@@ -1,7 +1,6 @@
 
 import datetime
 import html
-import json
 import logging
 import os
 import secrets
@@ -10,7 +9,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -362,24 +360,26 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     return get_purchase_record(active_purchase_id)
 
 
-def redirect_to_checkout(checkout_url: str) -> None:
-    safe_url = html.escape(checkout_url, quote=True)
-    js_url = json.dumps(checkout_url)
-    components.html(
+def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
+    st.markdown(
         f'''
-        <!doctype html>
-        <html>
-            <head>
-                <meta http-equiv="refresh" content="0; url={safe_url}">
-            </head>
-            <body>
-                <script>
-                    window.parent.location.replace({js_url});
-                </script>
-            </body>
-        </html>
+        <a href="{html.escape(checkout_url, quote=True)}" target="_self" style="text-decoration:none;">
+            <div style="
+                display:inline-block;
+                padding:0.85rem 1.25rem;
+                border-radius:999px;
+                background:#b14d2c;
+                color:#ffffff;
+                font-weight:700;
+                text-align:center;
+                margin-top:0.5rem;
+                margin-bottom:0.2rem;
+            ">
+                決済ページへ進む（{amount_jpy}円）
+            </div>
+        </a>
         ''',
-        height=0,
+        unsafe_allow_html=True,
     )
 
 
@@ -446,21 +446,17 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     if record and record.get("used_flag"):
         st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
 
-    checkout_button_area = st.empty()
-
-    with checkout_button_area.container():
-        should_create_checkout = st.button(f"決済ページへ進む（{active_amount_jpy}円）")
-
-    if should_create_checkout:
+    checkout_url = st.session_state.get("checkout_url")
+    if not checkout_url:
         checkout_url, error_message = create_checkout_session(logger)
         if error_message:
             st.error("決済ページを準備できませんでした。時間をおいてもう一度お試しください。")
             if SHOW_DEBUG:
                 st.caption(error_message)
-        elif checkout_url:
-            checkout_button_area.empty()
-            redirect_to_checkout(checkout_url)
-            st.stop()
+            return None
+
+    if checkout_url:
+        render_checkout_link(checkout_url, active_amount_jpy)
 
     return None
 
