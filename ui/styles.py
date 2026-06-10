@@ -256,9 +256,9 @@ def render_app_css() -> None:
 
         /* ===== ボタン ===== */
         .stButton > button {
-            background: #f3d6de;
-            color: #7a3248;
-            border: 1px solid #e2b8c4;
+            background: #b14d2c;
+            color: #ffffff;
+            border: 1px solid #b14d2c;
             border-radius: 999px;
             padding: 0.6rem 1.1rem;
             font-weight: 700;
@@ -266,15 +266,15 @@ def render_app_css() -> None:
         }
 
         .stButton > button:hover {
-            background: #ecc9d4;
-            border-color: #d8a8b8;
-            color: #6e2940;
+            background: #9f4326;
+            border-color: #9f4326;
+            color: #ffffff;
         }
 
         .stButton > button:focus:not(:active) {
-            border-color: #d8a8b8;
-            box-shadow: 0 0 0 0.2rem rgba(216, 168, 184, 0.28);
-            color: #6e2940;
+            border-color: #9f4326;
+            box-shadow: 0 0 0 0.2rem rgba(177, 77, 44, 0.24);
+            color: #ffffff;
         }
 
         .stDownloadButton > button {

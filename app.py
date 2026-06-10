@@ -446,19 +446,27 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     if record and record.get("used_flag"):
         st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
 
+    checkout_button_area = st.empty()
+
     if st.session_state.get("checkout_url"):
-        render_checkout_link(st.session_state["checkout_url"], active_amount_jpy)
+        with checkout_button_area.container():
+            render_checkout_link(st.session_state["checkout_url"], active_amount_jpy)
         return None
 
-    if st.button(f"決済ページへ進む（{active_amount_jpy}円）"):
+    with checkout_button_area.container():
+        should_create_checkout = st.button(f"決済ページへ進む（{active_amount_jpy}円）")
+
+    if should_create_checkout:
         checkout_url, error_message = create_checkout_session(logger)
         if error_message:
             st.error("決済ページを準備できませんでした。時間をおいてもう一度お試しください。")
             if SHOW_DEBUG:
                 st.caption(error_message)
         elif checkout_url:
-            st.success("決済ページの準備ができました。下のボタンから決済ページへ進んでください。")
-            render_checkout_link(checkout_url, active_amount_jpy)
+            checkout_button_area.empty()
+            with checkout_button_area.container():
+                render_checkout_link(checkout_url, active_amount_jpy)
+            st.success("決済ページの準備ができました。ボタンから決済ページへ進んでください。")
 
     return None
 
