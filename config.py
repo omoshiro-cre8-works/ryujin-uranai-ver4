@@ -15,7 +15,7 @@ def get_env(key: str, default: str | None = None, required: bool = False) -> str
 
 
 APP_TITLE = get_env('APP_TITLE', '龍神さまのお告げ')
-APP_SUBTITLE = get_env('APP_SUBTITLE', '巫女が龍神さまの声を聞き、あなたの運命を紐解きます。')
+APP_SUBTITLE = get_env('APP_SUBTITLE', 'ケモノ町の龍神さまから、今のあなたへひとつ言葉をお届けします。')
 APP_ENV = get_env('APP_ENV', 'local')
 LOG_LEVEL = get_env('LOG_LEVEL', 'INFO')
 GEMINI_MODEL = get_env('GEMINI_MODEL', 'gemini-2.5-flash')

@@ -360,7 +360,7 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     return get_purchase_record(active_purchase_id)
 
 
-def render_checkout_link(checkout_url: str) -> None:
+def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
     st.markdown(
         f'''
         <a href="{html.escape(checkout_url, quote=True)}" target="_self" style="text-decoration:none;">
@@ -375,7 +375,7 @@ def render_checkout_link(checkout_url: str) -> None:
                 margin-top:0.5rem;
                 margin-bottom:0.2rem;
             ">
-                Stripe の決済画面へ進む
+                決済ページへ進む（{amount_jpy}円）
             </div>
         </a>
         ''',
@@ -383,8 +383,37 @@ def render_checkout_link(checkout_url: str) -> None:
     )
 
 
+def render_pre_payment_intro(active_amount_jpy: int) -> None:
+    st.markdown(
+        f'''
+        <div style="border:1px solid #eadfd8; background:#fffdf9; border-radius:14px; padding:16px 18px; margin:0.4rem 0 1rem 0; color:#3b312d; line-height:1.8;">
+            <div>ここは、ケモノ町の龍神さまから、今のあなたへひとつ言葉を受け取るためのページです。</div>
+            <div style="margin-top:0.55rem;">所要時間は3〜5分ほどです。</div>
+            <div>1回{active_amount_jpy}円（税込）でご利用いただけます。</div>
+            <div>決済完了後、この画面に戻ると入力フォームが表示されます。</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_usage_flow(active_amount_jpy: int) -> None:
+    st.markdown('<div class="heading-lg">ご利用の流れ</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'''
+1. {active_amount_jpy}円の決済ページへ進む
+2. 決済完了後、このページに戻る
+3. 入力フォームに記入する
+4. お告げPDFを受け取る
+'''
+    )
+
+
 def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     _, active_amount_jpy = get_active_checkout_price(logger)
+    render_pre_payment_intro(active_amount_jpy)
+    render_usage_flow(active_amount_jpy)
+
     st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
     st.markdown(
         f'''
@@ -399,7 +428,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     )
 
     if not STRIPE_ENABLED:
-        st.error("Stripe の設定がまだ反映されていません。Cloud Run の環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を設定してください。")
+        st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
         if SHOW_DEBUG:
             st.caption(f"APP_BASE_URL={APP_BASE_URL} / WIX_CANCEL_URL={WIX_CANCEL_URL}")
         return None
@@ -417,15 +446,19 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     if record and record.get("used_flag"):
         st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
 
-    if st.button(f"💳 {active_amount_jpy}円でお告げを受ける"):
+    if st.session_state.get("checkout_url"):
+        render_checkout_link(st.session_state["checkout_url"], active_amount_jpy)
+        return None
+
+    if st.button(f"決済ページへ進む（{active_amount_jpy}円）"):
         checkout_url, error_message = create_checkout_session(logger)
         if error_message:
-            st.error(error_message)
+            st.error("決済ページを準備できませんでした。時間をおいてもう一度お試しください。")
+            if SHOW_DEBUG:
+                st.caption(error_message)
         elif checkout_url:
-            st.success("決済ページの準備ができました。下のボタンから Stripe Checkout へ進んでください。")
-
-    if st.session_state.get("checkout_url"):
-        render_checkout_link(st.session_state["checkout_url"])
+            st.success("決済ページの準備ができました。下のボタンから決済ページへ進んでください。")
+            render_checkout_link(checkout_url, active_amount_jpy)
 
     return None
 
@@ -488,17 +521,17 @@ def render_header() -> None:
 
 
 def render_notice_box() -> None:
-    st.markdown(
-        '''
-        <div style="border:1px solid #d98b73; background:#fff7f4; border-radius:14px; padding:14px 16px; margin:0.4rem 0 1rem 0; color:#3b312d;">
-            <div style="font-weight:700; color:#b14d2c; margin-bottom:0.45rem;">ご確認いただきたい大切なこと</div>
-            <div style="margin-bottom:0.25rem; color:#3b312d;">・本鑑定は参考情報としてお楽しみいただくためのものです。</div>
-            <div style="margin-bottom:0.25rem; color:#3b312d;">・医療・法律・投資などの重要な判断には利用せず、必要に応じて専門家へご相談ください。</div>
-            <div style="color:#3b312d;">・ご入力内容は鑑定結果の生成とPDF作成のために一時的に使用し、この版では決済制御用の最小情報のみ Firestore に保存します。</div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
+    with st.expander("ご利用前にご確認ください", expanded=False):
+        st.markdown(
+            '''本サービスは、参考情報としてお楽しみいただくためのものです。
+
+医療・法律・投資などの重要な判断には利用しないでください。
+
+入力内容は、鑑定結果の生成とPDF作成のために使用します。
+
+決済確認に必要な最小限の情報を、一時的に保存します。
+'''
+        )
 
 
 def render_pre_info() -> None:
@@ -760,15 +793,15 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 st.caption(str(exc))
 
         if SHOW_DEBUG:
-            with st.expander("開発メモ"):
+            with st.expander("確認メモ"):
                 st.markdown(
                     f'- 使用モデル: `{GEMINI_MODEL}`\n'
                     f'- 手相画像枚数: {len(uploaded_files or [])}\n'
                     f'- 相談カテゴリ: {", ".join(categories) if categories else "なし"}\n'
                     f'- 出生時刻の精度: {birth_time_accuracy}\n'
                     f'- 購入ID: {active_purchase.get("purchase_id")}\n'
-                    f'- 決済状態: {active_purchase.get("payment_status")}\n'
-                    '- 入力データはセッション内のみで扱い、決済制御用の最小情報のみ Firestore に保存する設計です。'
+                    f'- 決済確認: {active_purchase.get("payment_status")}\n'
+                    '- 入力内容は鑑定結果の生成とPDF作成のために使用します。'
                 )
 
 
@@ -786,10 +819,9 @@ def main() -> None:
         st.stop()
 
     render_header()
-    render_notice_box()
-    render_pre_info()
 
     active_purchase = render_payment_section(logger)
+    render_notice_box()
     render_form_gap(2)
 
     if active_purchase and active_purchase.get("used_flag"):
