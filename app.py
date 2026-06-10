@@ -1,6 +1,7 @@
 
 import datetime
 import html
+import json
 import logging
 import os
 import secrets
@@ -9,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -360,26 +362,24 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     return get_purchase_record(active_purchase_id)
 
 
-def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
-    st.markdown(
+def redirect_to_checkout(checkout_url: str) -> None:
+    safe_url = html.escape(checkout_url, quote=True)
+    js_url = json.dumps(checkout_url)
+    components.html(
         f'''
-        <a href="{html.escape(checkout_url, quote=True)}" target="_self" style="text-decoration:none;">
-            <div style="
-                display:inline-block;
-                padding:0.85rem 1.25rem;
-                border-radius:999px;
-                background:#b14d2c;
-                color:#ffffff;
-                font-weight:700;
-                text-align:center;
-                margin-top:0.5rem;
-                margin-bottom:0.2rem;
-            ">
-                決済ページへ進む（{amount_jpy}円）
-            </div>
-        </a>
+        <!doctype html>
+        <html>
+            <head>
+                <meta http-equiv="refresh" content="0; url={safe_url}">
+            </head>
+            <body>
+                <script>
+                    window.parent.location.replace({js_url});
+                </script>
+            </body>
+        </html>
         ''',
-        unsafe_allow_html=True,
+        height=0,
     )
 
 
@@ -448,11 +448,6 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
 
     checkout_button_area = st.empty()
 
-    if st.session_state.get("checkout_url"):
-        with checkout_button_area.container():
-            render_checkout_link(st.session_state["checkout_url"], active_amount_jpy)
-        return None
-
     with checkout_button_area.container():
         should_create_checkout = st.button(f"決済ページへ進む（{active_amount_jpy}円）")
 
@@ -464,9 +459,8 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
                 st.caption(error_message)
         elif checkout_url:
             checkout_button_area.empty()
-            with checkout_button_area.container():
-                render_checkout_link(checkout_url, active_amount_jpy)
-            st.success("決済ページの準備ができました。ボタンから決済ページへ進んでください。")
+            redirect_to_checkout(checkout_url)
+            st.stop()
 
     return None
 
