@@ -23,6 +23,27 @@
 - STRIPE_SECRET_KEY
 - STRIPE_PRICE_ID_REGULAR
 
+## GA4 Measurement Protocol 用の任意環境変数
+- GA4_ENABLED=false
+- GA4_MEASUREMENT_ID
+- GA4_API_SECRET
+
+`GA4_ENABLED=true` のときだけ、Cloud Run 側から GA4 Measurement Protocol でイベントを送信します。
+未設定または `false` の場合は送信しません。`GA4_API_SECRET` はコードに直書きせず、
+Cloud Run の環境変数または Secret Manager から注入してください。
+
+GA4で見る主なイベント:
+- `streamlit_page_view`
+- `checkout_session_created`
+- `form_displayed`
+- `pdf_generated`
+
+Wix LP から Cloud Run へ遷移するボタンURL例:
+
+```text
+https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?utm_source=instagram&utm_medium=paid_social&utm_campaign=ryujin_uranai_lp&utm_content=wix_cta
+```
+
 ## Stripe キャンペーン切り替え用の任意環境変数
 - STRIPE_PRICE_ID_CAMPAIGN
 - CAMPAIGN_END_AT

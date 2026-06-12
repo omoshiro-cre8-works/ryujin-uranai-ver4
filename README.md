@@ -89,6 +89,41 @@ py -m streamlit run app.py
 
 ---
 
+## GA4計測
+Cloud Run 上の Streamlit ページでは、GA4 Measurement Protocol を使ってサーバー側からイベントを送信します。通常の GA タグ埋め込みに依存しないため、Streamlit の再描画や Cloud Run 環境でも計測しやすい構成です。
+
+### 有効化に必要な環境変数
+GA4 計測を有効にする場合は、Cloud Run の環境変数または Secret Manager から以下を設定してください。API Secret はコードへ直書きしないでください。
+
+```text
+GA4_ENABLED=true
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX
+GA4_API_SECRET=your-ga4-api-secret
+```
+
+`GA4_ENABLED` が未設定または `false` の場合、GA4 への送信は行いません。送信に失敗してもアプリ本体の処理は継続し、warning ログのみを出します。
+
+### Wix LP から Cloud Run へ渡す推奨UTM
+Wix LP のボタンURLには、広告導線を識別できるように UTM を付けてください。
+
+```text
+https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?utm_source=instagram&utm_medium=paid_social&utm_campaign=ryujin_uranai_lp&utm_content=wix_cta
+```
+
+キャンペーンやボタン位置を分けたい場合は、`utm_campaign` と `utm_content` を広告セット名・CTA位置などに合わせて変更してください。
+
+### GA4で見るイベント名
+GA4 のイベントレポートや探索では、主に以下を確認します。
+
+- `streamlit_page_view`: Streamlit 決済前ページが表示された
+- `checkout_session_created`: Stripe Checkout Session が正常に作成された
+- `form_displayed`: 決済完了後に鑑定フォームが表示された
+- `pdf_generated`: お告げPDFが生成された
+
+各イベントには、可能な範囲で `page_location`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_content` を付与します。`checkout_session_created` には `amount_jpy` と `price_type` も付与します。氏名、生年月日、相談内容などの個人情報は GA4 へ送信しません。
+
+---
+
 ## フォルダ構成
 ```text
 uranai_app_stage3_base/

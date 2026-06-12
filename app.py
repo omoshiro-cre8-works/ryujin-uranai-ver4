@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import sys
+import urllib.parse
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,6 +22,9 @@ from config import (
     APP_TITLE,
     CATEGORY_OPTIONS,
     GEMINI_MODEL,
+    GA4_API_SECRET,
+    GA4_ENABLED,
+    GA4_MEASUREMENT_ID,
     HOUR_OPTIONS,
     LOG_LEVEL,
     MAX_IMAGE_FILES,
@@ -36,6 +40,7 @@ from services.firestore_service import (
     get_firestore_client,
 )
 from services.fortune_service import build_image_parts, call_gemini_fortune
+from services.ga4_service import send_ga4_event
 from services.pdf_service import generate_miko_letter_pdf
 from services.validation_service import (
     format_birth_time_text,
@@ -90,6 +95,94 @@ def init_session_state() -> None:
         st.session_state.active_purchase_id = None
     if "checkout_url" not in st.session_state:
         st.session_state.checkout_url = None
+    if "ga4_client_id" not in st.session_state:
+        st.session_state.ga4_client_id = secrets.token_urlsafe(16)
+    if "ga4_page_view_locations" not in st.session_state:
+        st.session_state.ga4_page_view_locations = set()
+    if "ga4_form_displayed_purchase_ids" not in st.session_state:
+        st.session_state.ga4_form_displayed_purchase_ids = set()
+    if "ga4_pdf_generated_purchase_ids" not in st.session_state:
+        st.session_state.ga4_pdf_generated_purchase_ids = set()
+
+
+def get_query_param_value(key: str) -> str | None:
+    value = st.query_params.get(key)
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    return str(value) if value is not None else None
+
+
+def get_utm_params() -> dict[str, str]:
+    utm_params = {}
+    for key in ["utm_source", "utm_medium", "utm_campaign", "utm_content"]:
+        value = get_query_param_value(key)
+        if value:
+            utm_params[key] = value
+    return utm_params
+
+
+def get_page_location() -> str:
+    query_params = {}
+    for key in st.query_params:
+        value = get_query_param_value(key)
+        if value is not None:
+            query_params[key] = value
+    query_string = urllib.parse.urlencode(query_params)
+    return f"{APP_BASE_URL}/?{query_string}" if query_string else f"{APP_BASE_URL}/"
+
+
+def get_checkout_price_type(price_id: str) -> str:
+    if STRIPE_PRICE_ID_CAMPAIGN and price_id == STRIPE_PRICE_ID_CAMPAIGN:
+        return "campaign"
+    return "regular"
+
+
+def build_checkout_success_url() -> str:
+    query_parts = ["session_id={CHECKOUT_SESSION_ID}"]
+    utm_params = get_utm_params()
+    if utm_params:
+        query_parts.append(urllib.parse.urlencode(utm_params))
+    return f"{APP_BASE_URL}/?{'&'.join(query_parts)}"
+
+
+def track_ga4_event(
+    event_name: str,
+    logger: logging.Logger,
+    params: dict[str, Any] | None = None,
+) -> bool:
+    event_params = {
+        "page_location": get_page_location(),
+        **get_utm_params(),
+    }
+    if params:
+        event_params.update(params)
+
+    return send_ga4_event(
+        event_name=event_name,
+        client_id=st.session_state.ga4_client_id,
+        measurement_id=GA4_MEASUREMENT_ID,
+        api_secret=GA4_API_SECRET,
+        enabled=GA4_ENABLED,
+        params=event_params,
+        logger=logger,
+    )
+
+
+def track_streamlit_page_view(logger: logging.Logger) -> None:
+    page_location = get_page_location()
+    tracked_locations = st.session_state.ga4_page_view_locations
+    if page_location in tracked_locations:
+        return
+
+    track_ga4_event(
+        "streamlit_page_view",
+        logger,
+        {
+            "page_location": page_location,
+            "page_title": APP_TITLE,
+        },
+    )
+    tracked_locations.add(page_location)
 
 
 def utc_now() -> datetime.datetime:
@@ -249,7 +342,7 @@ def create_checkout_session(logger: logging.Logger) -> tuple[str | None, str | N
                     "quantity": 1,
                 }
             ],
-            success_url=f"{APP_BASE_URL}/?session_id={{CHECKOUT_SESSION_ID}}",
+            success_url=build_checkout_success_url(),
             cancel_url=WIX_CANCEL_URL,
             client_reference_id=purchase_id,
             metadata={
@@ -270,6 +363,14 @@ def create_checkout_session(logger: logging.Logger) -> tuple[str | None, str | N
                 "env": APP_ENV,
                 "purchase_id": purchase_id,
                 "stripe_checkout_session_id": session.id,
+            },
+        )
+        track_ga4_event(
+            "checkout_session_created",
+            logger,
+            {
+                "amount_jpy": active_amount_jpy,
+                "price_type": get_checkout_price_type(active_price_id),
             },
         )
         return session.url, None
@@ -612,6 +713,12 @@ def render_pre_info() -> None:
 
 
 def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger) -> None:
+    purchase_id = active_purchase.get("purchase_id")
+    tracked_purchase_ids = st.session_state.ga4_form_displayed_purchase_ids
+    if purchase_id and purchase_id not in tracked_purchase_ids:
+        track_ga4_event("form_displayed", logger)
+        tracked_purchase_ids.add(purchase_id)
+
     st.caption("本アプリの鑑定は参考情報としてお楽しみください。")
 
     render_form_gap(2)
@@ -842,6 +949,11 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
         try:
             pdf_data = generate_miko_letter_pdf(st.session_state.user_name, data)
+            purchase_id = active_purchase.get("purchase_id")
+            tracked_purchase_ids = st.session_state.ga4_pdf_generated_purchase_ids
+            if purchase_id and purchase_id not in tracked_purchase_ids:
+                track_ga4_event("pdf_generated", logger)
+                tracked_purchase_ids.add(purchase_id)
             safe_name = st.session_state.user_name.replace(" ", "_")
             st.download_button(
                 label="📜 巫女からの手紙を保存する（PDF）",
@@ -874,6 +986,7 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
     init_session_state()
+    track_streamlit_page_view(logger)
 
     active_purchase = get_current_purchase_record()
     if active_purchase and active_purchase.get("used_flag"):

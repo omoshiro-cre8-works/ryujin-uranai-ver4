@@ -23,6 +23,9 @@ MIKO_IMAGE_PATH = str(BASE_DIR / get_env('MIKO_IMAGE_PATH', 'miko.png'))
 MAX_IMAGE_FILES = int(get_env('MAX_IMAGE_FILES', '2'))
 MAX_IMAGE_SIZE_MB = int(get_env('MAX_IMAGE_SIZE_MB', '10'))
 SHOW_DEBUG = get_env('SHOW_DEBUG', 'false').lower() == 'true'
+GA4_MEASUREMENT_ID = get_env('GA4_MEASUREMENT_ID', '')
+GA4_API_SECRET = get_env('GA4_API_SECRET', '')
+GA4_ENABLED = get_env('GA4_ENABLED', 'false').lower() == 'true'
 
 PDF_FONT_PATHS = [
     str(BASE_DIR / get_env('PDF_FONT_PATH_1', 'NotoSerifJP-Regular.ttf')),
