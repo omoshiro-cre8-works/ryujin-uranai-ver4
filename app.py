@@ -65,6 +65,11 @@ CAMPAIGN_TIMEZONE = os.getenv("CAMPAIGN_TIMEZONE", "Asia/Tokyo").strip() or "Asi
 REGULAR_AMOUNT_JPY = 300
 CAMPAIGN_AMOUNT_JPY = 100
 STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
+SAMPLE_PDF_IMAGE_PATHS = [
+    os.path.join("assets", "sample_pdf_1.png"),
+    os.path.join("assets", "sample_pdf_2.png"),
+    os.path.join("assets", "sample_pdf_3.png"),
+]
 
 
 def configure_logging() -> None:
@@ -375,7 +380,7 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
                 margin-top:0.5rem;
                 margin-bottom:0.2rem;
             ">
-                決済ページへ進む（{amount_jpy}円）
+                Stripe決済ページへ進む（{amount_jpy}円・1回のみ）
             </div>
         </a>
         ''',
@@ -409,10 +414,68 @@ def render_usage_flow(active_amount_jpy: int) -> None:
     )
 
 
+def render_pdf_sample_section() -> None:
+    st.markdown('<div class="heading-lg">お届けするPDFの見本</div>', unsafe_allow_html=True)
+    st.markdown(
+        '''
+決済後は、このようなPDF形式のお告げを受け取れます。
+内容の雰囲気を知りたい方は、下の見本をご覧ください。
+
+※画像はサンプルです。
+'''
+    )
+
+    columns = st.columns(3)
+    for index, image_path in enumerate(SAMPLE_PDF_IMAGE_PATHS, start=1):
+        with columns[index - 1]:
+            if os.path.exists(image_path):
+                st.image(
+                    image_path,
+                    caption=f"PDF見本 {index}ページ目",
+                    use_container_width=True,
+                )
+            else:
+                st.caption(f"PDF見本 {index}ページ目の画像を準備中です。")
+
+
+def render_pdf_contents_summary() -> None:
+    st.markdown('<div class="heading-lg">PDFに含まれる主な内容</div>', unsafe_allow_html=True)
+    st.markdown(
+        '''
+お告げPDFには、今のあなたに向けた言葉として、次のような内容が含まれます。
+
+・直近：これから3カ月以内の運勢  
+・展望：これから1年先の運勢  
+・未来：2〜3年後の運勢  
+・巫女の助言：開運アイテム、開運スポット、開運カラーなど  
+・心に留めること
+
+占いや診断の結果を断定するものではなく、今の気分を少し整えるための読みものとしてお楽しみください。
+'''
+    )
+
+
+def render_checkout_reassurance(active_amount_jpy: int) -> None:
+    st.markdown(
+        f'''
+        <div style="border:1px solid #eadfd8; background:#fffdf9; border-radius:14px; padding:14px 16px; margin:0.45rem 0 0.7rem 0; color:#3b312d; line-height:1.8;">
+            <div>お支払いは1回{active_amount_jpy}円（税込）です。</div>
+            <div>月額課金や継続課金ではありません。</div>
+            <div style="margin-top:0.55rem;">決済はStripeの決済ページで行われます。</div>
+            <div>このページでは、クレジットカード番号を保存しません。</div>
+            <div style="margin-top:0.55rem;">決済完了後、このページに戻ると鑑定フォームが表示されます。</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
     _, active_amount_jpy = get_active_checkout_price(logger)
     render_pre_payment_intro(active_amount_jpy)
     render_usage_flow(active_amount_jpy)
+    render_pdf_sample_section()
+    render_pdf_contents_summary()
 
     st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
     st.markdown(
@@ -456,6 +519,7 @@ def render_payment_section(logger: logging.Logger) -> dict[str, Any] | None:
             return None
 
     if checkout_url:
+        render_checkout_reassurance(active_amount_jpy)
         render_checkout_link(checkout_url, active_amount_jpy)
 
     return None
@@ -828,7 +892,7 @@ def main() -> None:
     elif active_purchase:
         render_fortune_form(active_purchase, logger)
     else:
-        st.info("まずは上のボタンから決済を完了すると、鑑定フォームが表示されます。")
+        st.info("決済が完了すると、このページに戻り、鑑定フォームが表示されます。")
         st.divider()
         return
 
