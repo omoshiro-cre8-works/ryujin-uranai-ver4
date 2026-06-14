@@ -6,6 +6,7 @@ import os
 import secrets
 import sys
 import urllib.parse
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ from config import (
     APP_ENV,
     APP_SUBTITLE,
     APP_TITLE,
+    BASE_DIR,
     CATEGORY_OPTIONS,
     GEMINI_MODEL,
     GA4_API_SECRET,
@@ -86,11 +88,24 @@ STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
 PRODUCT_TYPE_REGULAR = "regular"
 PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
+ASSETS_DIR = BASE_DIR / "assets"
 SAMPLE_PDF_IMAGE_PATHS = [
-    os.path.join("assets", "sample_pdf_1.png"),
-    os.path.join("assets", "sample_pdf_2.png"),
-    os.path.join("assets", "sample_pdf_3.png"),
+    ASSETS_DIR / "sample_pdf_1.png",
+    ASSETS_DIR / "sample_pdf_2.png",
+    ASSETS_DIR / "sample_pdf_3.png",
 ]
+
+
+def read_image_bytes(image_path: str | Path) -> bytes | None:
+    path = Path(image_path)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    try:
+        if path.exists() and path.is_file():
+            return path.read_bytes()
+    except OSError:
+        return None
+    return None
 
 
 def configure_logging() -> None:
@@ -625,9 +640,10 @@ def render_pdf_sample_section() -> None:
     columns = st.columns(3)
     for index, image_path in enumerate(SAMPLE_PDF_IMAGE_PATHS, start=1):
         with columns[index - 1]:
-            if os.path.exists(image_path):
+            image_bytes = read_image_bytes(image_path)
+            if image_bytes:
                 st.image(
-                    image_path,
+                    image_bytes,
                     caption=f"PDF見本 {index}ページ目",
                     use_container_width=True,
                 )
@@ -734,7 +750,9 @@ def render_completion_screen() -> None:
     render_form_gap(2)
     left, center, right = st.columns([1, 1.4, 1])
     with center:
-        st.image(str(MIKO_IMAGE_PATH), use_container_width=True)
+        miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
+        if miko_image_bytes:
+            st.image(miko_image_bytes, use_container_width=True)
 
     st.markdown(
         """
@@ -765,11 +783,9 @@ def render_completion_screen() -> None:
 def render_header() -> None:
     header_left, header_right = st.columns([1, 4])
     with header_left:
-        if os.path.exists(MIKO_IMAGE_PATH):
-            try:
-                st.image(str(MIKO_IMAGE_PATH), width=96)
-            except Exception:
-                st.caption("miko画像なし")
+        miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
+        if miko_image_bytes:
+            st.image(miko_image_bytes, width=96)
         else:
             st.caption("miko画像なし")
 
