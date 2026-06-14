@@ -31,6 +31,8 @@ from config import (
     LOG_LEVEL,
     MAX_IMAGE_FILES,
     MAX_IMAGE_SIZE_MB,
+    MAX_REVIEW_MEMO_LENGTH,
+    MAX_REVIEW_PDF_SIZE_MB,
     MIKO_IMAGE_PATH,
     MINUTE_OPTIONS,
     SHOW_DEBUG,
@@ -48,6 +50,8 @@ from services.validation_service import (
     format_birth_time_text,
     normalize_text,
     validate_inputs,
+    validate_review_inputs,
+    validate_review_pdf_content,
 )
 from ui.components import (
     build_selected_hand_sides,
@@ -814,15 +818,189 @@ def render_notice_box() -> None:
         )
 
 
-def render_review_placeholder(active_purchase: dict[str, Any]) -> None:
-    st.info("見返し便の入力フォームは次フェーズで実装予定です。今回の更新では、商品種別の決済・計測土台のみを追加しています。")
-    if SHOW_DEBUG:
-        with st.expander("確認メモ"):
-            st.markdown(
-                f'- 商品種別: `{get_purchase_product_type(active_purchase)}`\n'
-                f'- 購入ID: `{active_purchase.get("purchase_id")}`\n'
-                f'- 決済確認: `{active_purchase.get("payment_status")}`'
+def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger) -> None:
+    purchase_id = active_purchase.get("purchase_id")
+    product_type = get_purchase_product_type(active_purchase)
+    tracked_purchase_ids = st.session_state.ga4_form_displayed_purchase_ids
+    if purchase_id and purchase_id not in tracked_purchase_ids:
+        track_ga4_event("form_displayed", logger, {"product_type": product_type})
+        tracked_purchase_ids.add(purchase_id)
+
+    st.caption("見返し便は、前回のお告げと今の状態を照らし合わせるための入力フォームです。")
+
+    render_form_gap(2)
+    st.markdown('<div class="heading-lg">📋 見返し便の準備</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="label-sm">前回鑑定PDF</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'''
+前回お届けした「龍神さまのお告げ」の鑑定PDFをアップロードしてください。
+
+別のPDFや、内容を確認できないPDFをアップロードされた場合は、見返し便を作成できないことがあります。
+
+このアプリでは、{MAX_REVIEW_PDF_SIZE_MB}MB以内のPDFを使用してください。
+''',
+    )
+    uploaded_pdf = st.file_uploader(
+        f"前回鑑定PDF（PDF形式 / {MAX_REVIEW_PDF_SIZE_MB}MBまで）",
+        type=["pdf"],
+        accept_multiple_files=False,
+        key="review_previous_pdf",
+    )
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">氏名（漢字）</div>', unsafe_allow_html=True)
+    last_col, first_col = st.columns(2)
+    with last_col:
+        last_name = st.text_input("姓", placeholder="山田", key="review_last_name")
+    with first_col:
+        first_name = st.text_input("名", placeholder="太郎", key="review_first_name")
+    user_name = normalize_text(f"{last_name} {first_name}".strip())
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">生年月日</div>', unsafe_allow_html=True)
+    today = datetime.date.today()
+    year_options = ["年を選択"] + list(range(today.year, 1899, -1))
+    month_options = ["月を選択"] + list(range(1, 13))
+    day_options = ["日を選択"] + list(range(1, 32))
+    date_col1, date_col2, date_col3 = st.columns(3)
+    with date_col1:
+        birth_year = st.selectbox("年", year_options, index=0, key="review_birth_year")
+    with date_col2:
+        birth_month = st.selectbox("月", month_options, index=0, key="review_birth_month")
+    with date_col3:
+        birth_day_candidate = st.selectbox("日", day_options, index=0, key="review_birth_day")
+
+    birth_date = None
+    if (
+        birth_year != "年を選択"
+        and birth_month != "月を選択"
+        and birth_day_candidate != "日を選択"
+    ):
+        try:
+            birth_date = datetime.date(
+                int(birth_year), int(birth_month), int(birth_day_candidate)
             )
+        except ValueError:
+            st.error("存在しない日付です。生年月日を確認してください。")
+            birth_date = None
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">出生時間（任意・わかる範囲で）</div>', unsafe_allow_html=True)
+    st.caption("出生時間が分かる場合は選択してください。不明でもお申し込みいただけます。")
+    review_birth_time_accuracy = st.radio(
+        "出生時間の分かり具合",
+        TIME_ACCURACY_OPTIONS,
+        horizontal=True,
+        index=0,
+        key="review_birth_time_accuracy",
+    )
+    st.markdown(
+        f'<div class="input-help">選択中：{html.escape(review_birth_time_accuracy)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    review_birth_hour = None
+    review_birth_minute = None
+    if review_birth_time_accuracy != "不明":
+        time_col1, time_col2 = st.columns(2)
+        with time_col1:
+            review_birth_hour = st.selectbox("時", HOUR_OPTIONS, index=12, key="review_birth_hour")
+        with time_col2:
+            review_birth_minute = st.selectbox("分", MINUTE_OPTIONS, index=0, key="review_birth_minute")
+
+    review_birth_time_text = format_birth_time_text(
+        review_birth_time_accuracy,
+        review_birth_hour,
+        review_birth_minute,
+    )
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">現在の手相画像</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="input-help">現在の手相画像をアップロードしてください。前回からの変化を見るため、できるだけ最近撮影した画像をお使いください。画像は最大{MAX_IMAGE_FILES}枚までです。</div>',
+        unsafe_allow_html=True,
+    )
+    uploaded_files = st.file_uploader(
+        f"現在の手相画像（最大 {MAX_IMAGE_FILES} 枚 / 1枚 {MAX_IMAGE_SIZE_MB}MBまで）",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="review_palm_images",
+    )
+
+    hand_sides = []
+    if uploaded_files:
+        st.markdown('<div class="input-help">各画像の左右を選んでください。</div>', unsafe_allow_html=True)
+        hand_sides = build_selected_hand_sides(uploaded_files)
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">今回とくに見返したいテーマ</div>', unsafe_allow_html=True)
+    review_theme_options = ["（未選択）"] + CATEGORY_OPTIONS
+    selected_review_theme = st.selectbox(
+        "今回とくに見返したいテーマ",
+        review_theme_options,
+        index=0,
+        key="review_theme",
+    )
+    review_theme = "" if selected_review_theme == "（未選択）" else selected_review_theme
+
+    render_form_gap(2)
+
+    st.markdown('<div class="label-sm">近況メモ</div>', unsafe_allow_html=True)
+    st.caption(f"前回のお告げを受け取ってから、変化したこと、今気になっていること、選択したテーマに関する現在の状況を{MAX_REVIEW_MEMO_LENGTH}字以内で書いてください。")
+    review_memo = st.text_area(
+        "近況メモ",
+        placeholder="例: 前回のお告げから3カ月ほど経ち、仕事の進め方や人間関係に変化がありました。最近特に気になっていることは...",
+        height=160,
+        max_chars=MAX_REVIEW_MEMO_LENGTH,
+        key="review_memo",
+    )
+
+    render_form_gap(2)
+
+    if st.button("🐉 見返し便の入力内容を確認する", key="review_submit"):
+        errors = validate_review_inputs(
+            user_name=user_name,
+            birth_date_selected=birth_date is not None,
+            review_theme=review_theme,
+            uploaded_pdf=uploaded_pdf,
+            uploaded_files=uploaded_files or [],
+            hand_sides=hand_sides,
+            review_memo=review_memo,
+        )
+
+        if not errors and uploaded_pdf is not None:
+            # 第2弾では空実装。次フェーズでGeminiによるPDF内容判定をここへ差し込む。
+            errors.extend(validate_review_pdf_content(uploaded_pdf.getvalue()))
+
+        if errors:
+            st.error("入力内容に確認事項があります。")
+            for err in list(dict.fromkeys(errors)):
+                st.error(err)
+        else:
+            record = get_purchase_record(active_purchase.get("purchase_id"))
+            if not is_purchase_ready(record):
+                st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+                st.stop()
+
+            st.success("入力内容の確認まで完了しました。")
+            st.info(
+                "見返し便の鑑定生成は次フェーズで実装予定です。\n\n"
+                "次フェーズでは、アップロードされたPDFが「龍神さまのお告げ」の前回鑑定PDFとして読み取れるかを確認したうえで、見返し鑑定を作成します。"
+            )
+            if SHOW_DEBUG:
+                pdf_size = len(uploaded_pdf.getvalue()) if uploaded_pdf is not None else 0
+                st.caption(
+                    f"review_pdf_uploaded={uploaded_pdf is not None} / "
+                    f"review_pdf_size_bytes={pdf_size} / "
+                    f"review_image_count={len(uploaded_files or [])} / "
+                    f"review_birth_time={review_birth_time_text}"
+                )
 
 
 def render_pre_info() -> None:
@@ -1140,7 +1318,7 @@ def main() -> None:
         st.stop()
     elif active_purchase:
         if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
-            render_review_placeholder(active_purchase)
+            render_review_fortune_form(active_purchase, logger)
         else:
             render_fortune_form(active_purchase, logger)
     else:

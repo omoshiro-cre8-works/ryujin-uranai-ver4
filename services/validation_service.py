@@ -4,6 +4,8 @@ from config import (
     HAND_SIDE_OPTIONS,
     MAX_IMAGE_FILES,
     MAX_IMAGE_SIZE_MB,
+    MAX_REVIEW_MEMO_LENGTH,
+    MAX_REVIEW_PDF_SIZE_MB,
     get_app_passphrase,
     get_gemini_api_key,
 )
@@ -21,6 +23,85 @@ def get_mime_type(filename: str) -> str:
     if lower.endswith('.jpg') or lower.endswith('.jpeg'):
         return 'image/jpeg'
     raise ValueError('未対応の画像形式です。PNG、JPG、JPEG の画像を選んでください。')
+
+
+def validate_review_pdf_basic(uploaded_pdf: Any | None) -> list[str]:
+    errors: list[str] = []
+    if uploaded_pdf is None:
+        return ['前回鑑定PDFをアップロードしてください。']
+
+    file_name = str(getattr(uploaded_pdf, 'name', '') or '')
+    file_type = str(getattr(uploaded_pdf, 'type', '') or '').lower()
+    if not file_name.lower().endswith('.pdf'):
+        errors.append('前回鑑定PDFはPDF形式のファイルをアップロードしてください。')
+    if file_type and file_type not in {'application/pdf', 'application/x-pdf'}:
+        errors.append('前回鑑定PDFはPDF形式のファイルをアップロードしてください。')
+
+    pdf_bytes = uploaded_pdf.getvalue()
+    size_mb = len(pdf_bytes) / (1024 * 1024)
+    if size_mb > MAX_REVIEW_PDF_SIZE_MB:
+        errors.append(f'前回鑑定PDFのサイズが大きすぎます。{MAX_REVIEW_PDF_SIZE_MB}MB以内のPDFをアップロードしてください。')
+    if pdf_bytes and not pdf_bytes.startswith(b'%PDF'):
+        errors.append('前回鑑定PDFはPDFとして読み取れるファイルをアップロードしてください。')
+
+    return list(dict.fromkeys(errors))
+
+
+def validate_review_pdf_content(uploaded_pdf_bytes: bytes) -> list[str]:
+    # 次フェーズでGeminiによる「龍神さまのお告げ」鑑定PDFらしさの判定を差し込む。
+    return []
+
+
+def validate_review_inputs(
+    user_name: str,
+    birth_date_selected: bool,
+    review_theme: str,
+    uploaded_pdf: Any | None,
+    uploaded_files: list[Any],
+    hand_sides: list[str],
+    review_memo: str,
+) -> list[str]:
+    errors: list[str] = []
+    normalized_name = normalize_text(user_name)
+    normalized_memo = normalize_text(review_memo)
+
+    if not normalized_name:
+        errors.append('お名前をご入力ください。')
+    if len(normalized_name) > 60:
+        errors.append('お名前は60文字以内でご入力ください。')
+    if not birth_date_selected:
+        errors.append('生年月日を選択してください。')
+    if not normalize_text(review_theme):
+        errors.append('今回とくに見返したいテーマを選択してください。')
+
+    errors.extend(validate_review_pdf_basic(uploaded_pdf))
+
+    if not uploaded_files:
+        errors.append('現在の手相画像をアップロードしてください。')
+    if len(uploaded_files) > MAX_IMAGE_FILES:
+        errors.append(f'現在の手相画像は {MAX_IMAGE_FILES} 枚までにしてください。')
+    if uploaded_files and len(hand_sides) != len(uploaded_files):
+        errors.append('現在の手相画像の左右情報が不足しています。')
+
+    for index, file in enumerate(uploaded_files):
+        size_mb = getattr(file, 'size', 0) / (1024 * 1024)
+        if size_mb > MAX_IMAGE_SIZE_MB:
+            errors.append(f'画像サイズが大きすぎます。1枚あたり{MAX_IMAGE_SIZE_MB}MB以下の画像を選んでください。')
+        try:
+            get_mime_type(file.name)
+        except ValueError as exc:
+            errors.append(str(exc))
+        if index < len(hand_sides):
+            selected = hand_sides[index]
+            if selected not in HAND_SIDE_OPTIONS[1:]:
+                errors.append('現在の手相画像ごとに左手・右手を選択してください。')
+
+    if not normalized_memo:
+        errors.append('近況メモをご入力ください。')
+    if len(normalized_memo) > MAX_REVIEW_MEMO_LENGTH:
+        errors.append(f'近況メモは{MAX_REVIEW_MEMO_LENGTH}文字以内でご入力ください。')
+
+    return list(dict.fromkeys(errors))
 
 
 

@@ -126,7 +126,7 @@ GA4 のイベントレポートや探索では、主に以下を確認します�
 
 ## 商品種別 product_type
 
-第1弾として、将来の「龍神さまのお告げ 見返し便」追加に向けた商品種別の土台を持っています。
+将来の「龍神さまのお告げ 見返し便」追加に向けた商品種別の土台と、見返し便専用フォームの入口を持っています。
 
 - `product_type=regular`: 通常版（既定）
 - `product_type=review`: 龍神さまのお告げ 見返し便
@@ -140,9 +140,11 @@ STRIPE_PRICE_ID_REVIEW=
 STRIPE_PRICE_ID_REVIEW_CAMPAIGN=
 REVIEW_AMOUNT_JPY=980
 REVIEW_CAMPAIGN_AMOUNT_JPY=980
+MAX_REVIEW_PDF_SIZE_MB=10
+MAX_REVIEW_MEMO_LENGTH=1200
 ```
 
-この段階では、見返し便の前回PDFアップロード、GeminiによるPDF要約、見返し便用PDF生成は未実装です。
+見返し便フォームでは、前回鑑定PDF、姓名、生年月日、現在の手相画像、近況メモを入力できます。第2弾ではPDF形式とサイズの基本チェックまで行い、PDF内容判定、GeminiによるPDF要約、見返し便鑑定生成、見返し便用PDF生成は未実装です。
 
 ---
 

@@ -22,6 +22,8 @@ GEMINI_MODEL = get_env('GEMINI_MODEL', 'gemini-2.5-flash')
 MIKO_IMAGE_PATH = str(BASE_DIR / get_env('MIKO_IMAGE_PATH', 'miko.png'))
 MAX_IMAGE_FILES = int(get_env('MAX_IMAGE_FILES', '2'))
 MAX_IMAGE_SIZE_MB = int(get_env('MAX_IMAGE_SIZE_MB', '10'))
+MAX_REVIEW_PDF_SIZE_MB = int(get_env('MAX_REVIEW_PDF_SIZE_MB', '10'))
+MAX_REVIEW_MEMO_LENGTH = int(get_env('MAX_REVIEW_MEMO_LENGTH', '1200'))
 SHOW_DEBUG = get_env('SHOW_DEBUG', 'false').lower() == 'true'
 GA4_MEASUREMENT_ID = get_env('GA4_MEASUREMENT_ID', '')
 GA4_API_SECRET = get_env('GA4_API_SECRET', '')

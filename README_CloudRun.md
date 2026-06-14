@@ -31,8 +31,8 @@ Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に
 `?product_type=review` を付ける想定です。未指定または不正値は通常版として扱います。
 決済後は URL クエリではなく、Firestore の purchase に保存された `product_type` を正本として扱います。
 
-第1弾では、見返し便の PDF アップロード、Gemini による前回PDF要約、
-見返し便用PDF生成は未実装です。
+第2弾では、見返し便フォーム、前回鑑定PDFアップロード欄、PDF形式・サイズの基本チェックを追加しています。
+Gemini による前回PDF内容判定、前回PDF要約、見返し便鑑定生成、見返し便用PDF生成は未実装です。
 
 ## GA4 Measurement Protocol 用の任意環境変数
 - GA4_ENABLED=false
@@ -64,6 +64,8 @@ https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?utm_source=instagram&
 - STRIPE_PRICE_ID_REVIEW_CAMPAIGN
 - REVIEW_AMOUNT_JPY
 - REVIEW_CAMPAIGN_AMOUNT_JPY
+- MAX_REVIEW_PDF_SIZE_MB
+- MAX_REVIEW_MEMO_LENGTH
 - CAMPAIGN_END_AT
 - CAMPAIGN_TIMEZONE
 
