@@ -120,7 +120,29 @@ GA4 のイベントレポートや探索では、主に以下を確認します�
 - `form_displayed`: 決済完了後に鑑定フォームが表示された
 - `pdf_generated`: お告げPDFが生成された
 
-各イベントには、可能な範囲で `page_location`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_content` を付与します。`checkout_session_created` には `amount_jpy` と `price_type` も付与します。氏名、生年月日、相談内容などの個人情報は GA4 へ送信しません。
+各イベントには、可能な範囲で `page_location`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `product_type` を付与します。`checkout_session_created` には `amount_jpy` と `price_type` も付与します。氏名、生年月日、相談内容、近況メモ、PDF本文、手相画像などの個人情報は GA4 へ送信しません。
+
+---
+
+## 商品種別 product_type
+
+第1弾として、将来の「龍神さまのお告げ 見返し便」追加に向けた商品種別の土台を持っています。
+
+- `product_type=regular`: 通常版（既定）
+- `product_type=review`: 龍神さまのお告げ 見返し便
+
+Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に `?product_type=review` を付ける想定です。未指定または不正値は通常版として扱います。決済後は URL クエリではなく、Firestore の purchase に保存された `product_type` を正本として扱います。
+
+見返し便用の環境変数候補:
+
+```text
+STRIPE_PRICE_ID_REVIEW=
+STRIPE_PRICE_ID_REVIEW_CAMPAIGN=
+REVIEW_AMOUNT_JPY=980
+REVIEW_CAMPAIGN_AMOUNT_JPY=980
+```
+
+この段階では、見返し便の前回PDFアップロード、GeminiによるPDF要約、見返し便用PDF生成は未実装です。
 
 ---
 

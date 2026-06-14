@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 FIRESTORE_COLLECTION_NAME = os.getenv("FIRESTORE_COLLECTION_NAME", "purchases")
+PRODUCT_TYPE_REGULAR = "regular"
+PRODUCT_TYPE_REVIEW = "review"
+VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -40,6 +43,13 @@ def get_purchase_record(purchase_id: str) -> dict[str, Any] | None:
     if not snapshot.exists:
         return None
     return snapshot.to_dict() or {}
+
+
+def normalize_product_type(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in VALID_PRODUCT_TYPES:
+        return normalized
+    return PRODUCT_TYPE_REGULAR
 
 
 def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] | None:
@@ -91,12 +101,17 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
     amount_total = session.get("amount_total")
     currency = session.get("currency")
     amount_jpy = amount_total if currency == "jpy" and isinstance(amount_total, int) else None
+    product_type = normalize_product_type(
+        metadata.get("product_type") or str(record.get("product_type") or "")
+    )
 
     update_purchase_record(
         purchase_id,
         payment_status="paid",
         stripe_checkout_session_id=session.get("id"),
         stripe_event_id=event_id,
+        product_type=product_type,
+        price_type=metadata.get("price_type") or record.get("price_type"),
         price_id=metadata.get("price_id"),
         amount_jpy=amount_jpy,
         amount_total=amount_total,

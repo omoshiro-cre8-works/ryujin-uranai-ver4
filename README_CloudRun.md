@@ -23,6 +23,17 @@
 - STRIPE_SECRET_KEY
 - STRIPE_PRICE_ID_REGULAR
 
+## 商品種別 product_type
+- `product_type=regular`: 通常版（既定）
+- `product_type=review`: 龍神さまのお告げ 見返し便
+
+Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に
+`?product_type=review` を付ける想定です。未指定または不正値は通常版として扱います。
+決済後は URL クエリではなく、Firestore の purchase に保存された `product_type` を正本として扱います。
+
+第1弾では、見返し便の PDF アップロード、Gemini による前回PDF要約、
+見返し便用PDF生成は未実装です。
+
 ## GA4 Measurement Protocol 用の任意環境変数
 - GA4_ENABLED=false
 - GA4_MEASUREMENT_ID
@@ -38,6 +49,9 @@ GA4で見る主なイベント:
 - `form_displayed`
 - `pdf_generated`
 
+各イベントには `product_type` を付与します。氏名、生年月日、相談本文、
+近況メモ、PDF本文、手相画像などの個人情報や本文は GA4 に送信しません。
+
 Wix LP から Cloud Run へ遷移するボタンURL例:
 
 ```text
@@ -46,6 +60,10 @@ https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?utm_source=instagram&
 
 ## Stripe キャンペーン切り替え用の任意環境変数
 - STRIPE_PRICE_ID_CAMPAIGN
+- STRIPE_PRICE_ID_REVIEW
+- STRIPE_PRICE_ID_REVIEW_CAMPAIGN
+- REVIEW_AMOUNT_JPY
+- REVIEW_CAMPAIGN_AMOUNT_JPY
 - CAMPAIGN_END_AT
 - CAMPAIGN_TIMEZONE
 

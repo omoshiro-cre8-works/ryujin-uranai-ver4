@@ -29,6 +29,8 @@ def create_purchase_record(
     stripe_checkout_session_id: str,
     access_token: str,
     token_expires_at: datetime,
+    product_type: str = "regular",
+    price_type: Optional[str] = None,
     price_id: Optional[str] = None,
     amount_jpy: int = 300,
     currency: str = "jpy",
@@ -42,6 +44,8 @@ def create_purchase_record(
         stripe_checkout_session_id: Stripe Checkout Session ID
         access_token: 決済後アクセス用トークン
         token_expires_at: トークン有効期限（UTC datetime）
+        product_type: 商品種別（regular / review）
+        price_type: 価格種別（regular_campaign / review_regular など）
         price_id: Stripe Price ID
         amount_jpy: 金額（既定 300）
         currency: 通貨（既定 jpy）
@@ -64,6 +68,8 @@ def create_purchase_record(
         "used_at": None,
         "access_token": access_token,
         "token_expires_at": token_expires_at,
+        "product_type": product_type if product_type in {"regular", "review"} else "regular",
+        "price_type": price_type,
         "price_id": price_id,
         "amount_jpy": amount_jpy,
         "currency": currency,
