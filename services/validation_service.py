@@ -47,9 +47,10 @@ def validate_review_pdf_basic(uploaded_pdf: Any | None) -> list[str]:
     return list(dict.fromkeys(errors))
 
 
-def validate_review_pdf_content(uploaded_pdf_bytes: bytes) -> list[str]:
-    # 次フェーズでGeminiによる「龍神さまのお告げ」鑑定PDFらしさの判定を差し込む。
-    return []
+def validate_review_pdf_content(uploaded_pdf_bytes: bytes) -> dict[str, Any]:
+    from services.fortune_service import call_gemini_review_pdf_analysis
+
+    return call_gemini_review_pdf_analysis(uploaded_pdf_bytes)
 
 
 def validate_review_inputs(

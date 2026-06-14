@@ -181,6 +181,14 @@ def get_product_display_name(product_type: str) -> str:
     return APP_TITLE
 
 
+def format_iso_date_japanese(value: str) -> str:
+    try:
+        parsed = datetime.datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return value or ""
+    return f"{parsed.year}年{parsed.month}月{parsed.day}日"
+
+
 def get_page_location() -> str:
     query_params = {}
     for key in st.query_params:
@@ -974,10 +982,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             review_memo=review_memo,
         )
 
-        if not errors and uploaded_pdf is not None:
-            # 第2弾では空実装。次フェーズでGeminiによるPDF内容判定をここへ差し込む。
-            errors.extend(validate_review_pdf_content(uploaded_pdf.getvalue()))
-
         if errors:
             st.error("入力内容に確認事項があります。")
             for err in list(dict.fromkeys(errors)):
@@ -988,10 +992,28 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
                 st.stop()
 
-            st.success("入力内容の確認まで完了しました。")
+            with st.spinner("前回PDFを確認しています..."):
+                pdf_analysis = validate_review_pdf_content(uploaded_pdf.getvalue())
+
+            if not pdf_analysis.get("is_valid_previous_pdf"):
+                st.error("アップロードされたPDFから、前回の「龍神さまのお告げ」鑑定PDFであることを十分に確認できませんでした。")
+                st.error("前回お届けした鑑定PDFをご確認のうえ、再アップロードしてください。")
+                if SHOW_DEBUG:
+                    st.caption(str(pdf_analysis.get("reason") or "判定理由を取得できませんでした。"))
+                return
+
+            previous_reading_date = str(pdf_analysis.get("previous_reading_date") or "")
+            if not previous_reading_date:
+                st.error("アップロードされたPDFから、前回鑑定日を確認できませんでした。")
+                st.error("前回お届けした「龍神さまのお告げ」の鑑定PDFかどうかをご確認のうえ、再アップロードしてください。")
+                return
+
+            previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
+            st.success("前回PDFの確認が完了しました。")
             st.info(
-                "見返し便の鑑定生成は次フェーズで実装予定です。\n\n"
-                "次フェーズでは、アップロードされたPDFが「龍神さまのお告げ」の前回鑑定PDFとして読み取れるかを確認したうえで、見返し鑑定を作成します。"
+                f"添付いただいた前回の鑑定は、{previous_reading_date_label}のお告げとして読み取れました。\n\n"
+                "今回は、その時のお告げから現在までの流れと、現在の手相・近況を踏まえて、運勢の見直しを行う準備ができました。\n\n"
+                "見返し便の鑑定生成は次フェーズで実装予定です。"
             )
             if SHOW_DEBUG:
                 pdf_size = len(uploaded_pdf.getvalue()) if uploaded_pdf is not None else 0
@@ -999,7 +1021,9 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     f"review_pdf_uploaded={uploaded_pdf is not None} / "
                     f"review_pdf_size_bytes={pdf_size} / "
                     f"review_image_count={len(uploaded_files or [])} / "
-                    f"review_birth_time={review_birth_time_text}"
+                    f"review_birth_time={review_birth_time_text} / "
+                    f"previous_reading_date_confidence={pdf_analysis.get('previous_reading_date_confidence')} / "
+                    f"days_since_previous_reading={pdf_analysis.get('days_since_previous_reading')}"
                 )
 
 
