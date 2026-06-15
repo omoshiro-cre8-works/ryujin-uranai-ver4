@@ -104,6 +104,38 @@ REVIEW_PDF_SUMMARY_RESPONSE_JSON_SCHEMA = {
     'required': ['previous_summary'],
 }
 
+REVIEW_FORTUNE_RESPONSE_JSON_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'review_fortune': {
+            'type': 'object',
+            'properties': {
+                'intro': {'type': 'string'},
+                'continuing_flow': {'type': 'string'},
+                'current_changes': {'type': 'string'},
+                'theme_review': {'type': 'string'},
+                'next_3_months': {'type': 'string'},
+                'one_year_guidance': {'type': 'string'},
+                'ryujin_message': {'type': 'string'},
+                'miko_advice': {'type': 'string'},
+                'things_to_remember': {'type': 'string'},
+            },
+            'required': [
+                'intro',
+                'continuing_flow',
+                'current_changes',
+                'theme_review',
+                'next_3_months',
+                'one_year_guidance',
+                'ryujin_message',
+                'miko_advice',
+                'things_to_remember',
+            ],
+        },
+    },
+    'required': ['review_fortune'],
+}
+
 REVIEW_REQUIRED_SECTIONS = [
     '龍神さまのお告げ',
     '龍神さまの鑑定書',
@@ -138,6 +170,32 @@ REVIEW_SUMMARY_LIST_FIELDS = [
     'lucky_places',
     'lucky_colors',
     'important_phrases',
+]
+
+REVIEW_FORTUNE_FIELDS = [
+    'intro',
+    'continuing_flow',
+    'current_changes',
+    'theme_review',
+    'next_3_months',
+    'one_year_guidance',
+    'ryujin_message',
+    'miko_advice',
+    'things_to_remember',
+]
+
+REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
+    '絶対に',
+    '必ず',
+    '運命です',
+    '悪いことが起きます',
+    '前回は当たっていました',
+    '前回は外れていました',
+    '前回のお告げは当たっていました',
+    '前回のお告げは外れていました',
+    '前回の鑑定は正しかったです',
+    '前回の鑑定は間違っていました',
+    'あなたはこうするべきです',
 ]
 
 
@@ -272,6 +330,91 @@ def build_review_pdf_summary_prompt(
 """.strip()
 
 
+def build_review_fortune_prompt(
+    review_context: dict[str, Any],
+    current_private_inputs: dict[str, Any],
+) -> str:
+    safe_context_json = json.dumps(review_context, ensure_ascii=False, indent=2)
+    private_inputs_json = json.dumps(current_private_inputs, ensure_ascii=False, indent=2)
+    return f"""
+AIうらない「龍神さまのお告げ 見返し便」の鑑定本文を生成してください。
+
+以下の review_context は、第3弾Bで作成した前回PDF要約・時間軸再分類・現在入力の統合データです。
+以下の current_private_inputs は、今回の本文生成だけに使う現在入力情報です。
+
+review_context:
+{safe_context_json}
+
+current_private_inputs:
+{private_inputs_json}
+
+現在の手相画像も添付されています。画像から読み取れる現在の状態や変化の手がかりを、前回PDF要約、時間軸再分類、相談テーマ、近況メモと重ねてください。
+
+必ずJSONのみで返してください。章立ては以下のキーに対応させてください。
+{{
+  "review_fortune": {{
+    "intro": "",
+    "continuing_flow": "",
+    "current_changes": "",
+    "theme_review": "",
+    "next_3_months": "",
+    "one_year_guidance": "",
+    "ryujin_message": "",
+    "miko_advice": "",
+    "things_to_remember": ""
+  }}
+}}
+
+本文に必ず反映すること:
+- 前回鑑定日、今回鑑定日、前回鑑定日からの経過日数・経過月数。
+- timeline_reinterpretation の status と note。
+- 前回PDF要約の内容。
+- 現在の手相画像から読み取れる今回時点の手がかり。
+- 今回とくに見返したいテーマ。
+- 近況メモに書かれた本人の現実感。
+
+重要な解釈方針:
+- 前回のお告げを「当たり」「外れ」と評価しない。
+- 「前回のお告げは当たっていました」「外れていました」「正しかった」「間違っていた」のような採点表現を使わない。
+- 前回のお告げと現在の近況が重なる点、前回時点とは違う流れになっている点、今も続いているテーマ、これからも意識したい流れとして整理する。
+- 姓名判断は変わりにくい土台として扱う。
+- 生年月日由来の四柱推命・西洋占星術の本質的傾向は土台として扱い、前回から大きく変化したものとして扱わない。
+- 時期運は、前回鑑定日からの経過期間を踏まえて今回時点で再解釈する。
+- 手相は、現在の状態や変化を映す手がかりとして扱う。
+- 近況メモは、本人が実際に感じている現実として尊重する。
+
+文体:
+- やさしく、静かで、少し神秘的に。
+- 不安をあおらない。
+- 断定しすぎない。
+- 押しつけない。
+- 広告っぽくしない。
+- 鑑定らしさは保ちつつ、怖がらせない。
+
+避ける表現:
+- 絶対に
+- 必ず
+- 運命です
+- 悪いことが起きます
+- あなたはこうするべきです
+- 前回は当たっていました
+- 前回は外れていました
+- 前回の鑑定は正しかったです
+- 前回の鑑定は間違っていました
+
+使ってよい表現:
+- 〜の流れが見えます
+- 〜を意識するとよさそうです
+- 〜として受け取ることができます
+- 〜が静かに続いているようです
+- 〜を整えていく時期かもしれません
+
+個人情報の扱い:
+- 氏名や生年月日を本文内に不必要に繰り返さない。
+- 近況メモは丸写しせず、本人の状況として短く受け止めて要約する。
+""".strip()
+
+
 def _safe_error_message(exc: Exception, limit: int = 180) -> str:
     message = str(exc).replace('\n', ' ').replace('\r', ' ').strip()
     message = re.sub(r'AIza[0-9A-Za-z_\-]{20,}', '[redacted-api-key]', message)
@@ -318,6 +461,20 @@ def _empty_review_pdf_summary(
     result = {
         'summary_success': False,
         'previous_summary': _empty_previous_summary(),
+        'reason': reason,
+    }
+    if diagnostics:
+        result['diagnostics'] = diagnostics
+    return result
+
+
+def _empty_review_fortune(
+    reason: str,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = {
+        'fortune_success': False,
+        'review_fortune': {field: '' for field in REVIEW_FORTUNE_FIELDS},
         'reason': reason,
     }
     if diagnostics:
@@ -447,6 +604,38 @@ def parse_review_pdf_summary_result(raw_text: str) -> dict[str, Any]:
         'summary_success': True,
         'previous_summary': summary,
         'reason': '前回PDF要約を整理しました。',
+    }
+
+
+def parse_review_fortune_result(raw_text: str) -> dict[str, Any]:
+    text = (raw_text or '').strip()
+    if not text:
+        return _empty_review_fortune('Geminiから見返し便鑑定本文が返ってきませんでした。')
+
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return _empty_review_fortune('Geminiの見返し便鑑定本文をJSONとして解析できませんでした。')
+
+    if not isinstance(parsed, dict):
+        return _empty_review_fortune('Geminiの見返し便鑑定本文の形式が想定と異なります。')
+
+    raw_fortune = parsed.get('review_fortune')
+    if not isinstance(raw_fortune, dict):
+        return _empty_review_fortune('Geminiの見返し便鑑定本文に review_fortune が含まれていません。')
+
+    review_fortune = {field: str(raw_fortune.get(field) or '').strip() for field in REVIEW_FORTUNE_FIELDS}
+    combined_text = '\n'.join(review_fortune.values())
+    if any(phrase in combined_text for phrase in REVIEW_FORTUNE_FORBIDDEN_PHRASES):
+        return _empty_review_fortune('見返し便鑑定本文に避けたい表現が含まれていました。')
+
+    return {
+        'fortune_success': all(bool(review_fortune[field]) for field in REVIEW_FORTUNE_FIELDS),
+        'review_fortune': review_fortune,
+        'reason': '見返し便鑑定本文を整理しました。',
     }
 
 
@@ -681,6 +870,73 @@ def build_review_context(
             'current_inputs': safe_current_inputs,
         }
     }
+
+
+def call_gemini_review_fortune(
+    review_context: dict[str, Any],
+    current_private_inputs: dict[str, Any],
+    image_parts: list[Any],
+) -> dict[str, Any]:
+    failed_step = 'build_contents'
+    diagnostics_base = {
+        'model_name': GEMINI_MODEL,
+    }
+    contents: list[Any] = [build_review_fortune_prompt(review_context, current_private_inputs)]
+    contents.extend(image_parts)
+
+    logger.info('review_fortune_started', extra={'model': GEMINI_MODEL, 'image_count': len(image_parts)})
+    try:
+        failed_step = 'client_init'
+        api_key = get_gemini_api_key()
+        client = get_gemini_client(api_key)
+        failed_step = 'generate_content'
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type='application/json',
+                response_json_schema=REVIEW_FORTUNE_RESPONSE_JSON_SCHEMA,
+                temperature=0.65,
+            ),
+        )
+    except Exception as exc:
+        diagnostics = {
+            **diagnostics_base,
+            'error_type': type(exc).__name__,
+            'error_message_short': _safe_error_message(exc),
+            'failed_step': failed_step,
+        }
+        logger.warning(
+            'review_fortune_failed',
+            extra={
+                'error_type': diagnostics['error_type'],
+                'failed_step': failed_step,
+                'model_name': GEMINI_MODEL,
+                'image_count': len(image_parts),
+            },
+        )
+        return _empty_review_fortune(
+            '見返し便の鑑定本文生成中にエラーが発生しました。時間をおいてもう一度お試しください。',
+            diagnostics,
+        )
+
+    failed_step = 'parse_response'
+    result = parse_review_fortune_result(response.text or '')
+    result['diagnostics'] = {
+        **diagnostics_base,
+        'failed_step': '' if result.get('fortune_success') else failed_step,
+        'error_type': '',
+        'error_message_short': '',
+    }
+    logger.info(
+        'review_fortune_completed',
+        extra={
+            'review_fortune_success': bool(result.get('fortune_success')),
+            'model_name': GEMINI_MODEL,
+            'image_count': len(image_parts),
+        },
+    )
+    return result
 
 
 

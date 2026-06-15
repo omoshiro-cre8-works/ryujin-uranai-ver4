@@ -47,6 +47,7 @@ from services.fortune_service import (
     build_image_parts,
     build_review_context,
     call_gemini_fortune,
+    call_gemini_review_fortune,
     call_gemini_review_pdf_summary,
 )
 from services.ga4_service import send_ga4_event
@@ -147,6 +148,8 @@ def init_session_state() -> None:
         st.session_state.ga4_pdf_generated_purchase_ids = set()
     if "review_context" not in st.session_state:
         st.session_state.review_context = None
+    if "review_fortune" not in st.session_state:
+        st.session_state.review_fortune = None
 
 
 def get_query_param_value(key: str) -> str | None:
@@ -978,7 +981,9 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
     render_form_gap(2)
 
-    if st.button("🐉 見返し便の入力内容を確認する", key="review_submit"):
+    if st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit"):
+        st.session_state.review_context = None
+        st.session_state.review_fortune = None
         errors = validate_review_inputs(
             user_name=user_name,
             birth_date_selected=birth_date is not None,
@@ -1045,13 +1050,49 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             )
             st.session_state.review_context = review_context
 
+            try:
+                image_parts = build_image_parts(uploaded_files or [])
+            except Exception as exc:
+                st.error("現在の手相画像の読み込み中にエラーが発生しました。")
+                if SHOW_DEBUG:
+                    st.caption(f"error_type={type(exc).__name__} / failed_step=build_image_parts")
+                return
+
+            with st.spinner("見返し便の鑑定本文を生成しています..."):
+                review_fortune_result = call_gemini_review_fortune(
+                    review_context=review_context,
+                    current_private_inputs={
+                        "user_name": normalize_text(user_name),
+                        "birth_date": birth_date.isoformat() if birth_date else "",
+                        "birth_time_text": review_birth_time_text,
+                        "selected_theme": review_theme,
+                        "review_memo": normalize_text(review_memo),
+                    },
+                    image_parts=image_parts,
+                )
+
+            if not review_fortune_result.get("fortune_success"):
+                st.error("見返し便の鑑定本文生成中にエラーが発生しました。")
+                st.error("時間をおいてもう一度お試しください。")
+                if SHOW_DEBUG:
+                    diagnostics = review_fortune_result.get("diagnostics") or {}
+                    st.caption(
+                        f"failed_step={diagnostics.get('failed_step', '')} / "
+                        f"error_type={diagnostics.get('error_type', '')} / "
+                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)}"
+                    )
+                return
+
+            st.session_state.review_fortune = review_fortune_result.get("review_fortune") or {}
+
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
             st.success("前回PDFの確認と要約が完了しました。")
             st.info(
                 f"添付いただいた前回の鑑定は、{previous_reading_date_label}のお告げとして読み取れました。\n\n"
                 "前回のお告げから現在までの流れを整理しました。\n\n"
                 "今回の見返し便では、前回のお告げを当たり外れで判断するのではなく、現在の手相・近況・見返したいテーマと重ねて、今あらためて見えてくる流れを読み直します。\n\n"
-                "見返し便の鑑定本文生成は次フェーズで実装予定です。"
+                "見返し便の鑑定本文を生成しました。内容をご確認ください。\n\n"
+                "※PDF生成は次フェーズで実装予定です。"
             )
             if SHOW_DEBUG:
                 timeline = review_context.get("review_context", {}).get("timeline_reinterpretation", {})
@@ -1066,6 +1107,25 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     f"one_year_status={timeline.get('one_year_status')} / "
                     f"two_to_three_years_status={timeline.get('two_to_three_years_status')}"
                 )
+
+    review_fortune = st.session_state.get("review_fortune")
+    if review_fortune:
+        render_form_gap(2)
+        st.markdown('<div class="heading-lg">📜 見返し便の鑑定本文</div>', unsafe_allow_html=True)
+        st.caption("※PDF生成は次フェーズで実装予定です。")
+        review_fortune_sections = [
+            ("はじめに", "intro"),
+            ("前回のお告げから続いている流れ", "continuing_flow"),
+            ("現在の手相と近況から見える変化", "current_changes"),
+            ("今回のテーマについての見返し", "theme_review"),
+            ("これから3カ月ほど意識したいこと", "next_3_months"),
+            ("1年先に向けて整えていくこと", "one_year_guidance"),
+            ("龍神さまからの見返しの言葉", "ryujin_message"),
+            ("巫女の助言", "miko_advice"),
+            ("心に留めること", "things_to_remember"),
+        ]
+        for title, key in review_fortune_sections:
+            render_html_box(title, str(review_fortune.get(key) or ""))
 
 
 def render_pre_info() -> None:
