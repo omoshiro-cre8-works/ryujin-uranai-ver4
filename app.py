@@ -617,17 +617,37 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     session_id = st.query_params.get("session_id")
     access_token = get_query_param_value("access_token")
     purchase_id = get_query_param_value("purchase_id")
+    should_clean_purchase_query = False
     if session_id:
         synced_record = sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
         if synced_record:
+            should_clean_purchase_query = bool(access_token or purchase_id or get_query_param_value("product_type"))
+            if should_clean_purchase_query:
+                st.session_state.active_purchase_id = synced_record.get("purchase_id")
+                clean_purchase_query_params()
             return synced_record
     if access_token:
         token_record = get_purchase_by_access_token(access_token)
         if token_record and (not purchase_id or str(token_record.get("purchase_id") or "") == purchase_id):
             st.session_state.active_purchase_id = token_record.get("purchase_id")
+            clean_purchase_query_params()
             return token_record
     active_purchase_id = st.session_state.get("active_purchase_id")
     return get_purchase_record(active_purchase_id)
+
+
+def clean_purchase_query_params() -> None:
+    removable_keys = {"session_id", "purchase_id", "access_token", "product_type"}
+    remaining_params: dict[str, str] = {}
+    for key in st.query_params:
+        if key in removable_keys:
+            continue
+        value = get_query_param_value(key)
+        if value is not None:
+            remaining_params[key] = value
+    st.query_params.clear()
+    for key, value in remaining_params.items():
+        st.query_params[key] = value
 
 
 def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
@@ -1541,7 +1561,7 @@ def main() -> None:
     requested_product_type = get_requested_product_type()
     display_product_type = (
         get_purchase_product_type(active_purchase)
-        if active_purchase and active_purchase.get("payment_status") == "paid"
+        if active_purchase
         else requested_product_type
     )
     track_streamlit_page_view(logger, display_product_type)
