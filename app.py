@@ -51,7 +51,7 @@ from services.fortune_service import (
     call_gemini_review_pdf_summary,
 )
 from services.ga4_service import send_ga4_event
-from services.pdf_service import generate_miko_letter_pdf
+from services.pdf_service import generate_miko_letter_pdf, generate_review_fortune_pdf
 from services.validation_service import (
     format_birth_time_text,
     normalize_text,
@@ -150,6 +150,14 @@ def init_session_state() -> None:
         st.session_state.review_context = None
     if "review_fortune" not in st.session_state:
         st.session_state.review_fortune = None
+    if "review_pdf_bytes" not in st.session_state:
+        st.session_state.review_pdf_bytes = None
+    if "review_pdf_generated_purchase_id" not in st.session_state:
+        st.session_state.review_pdf_generated_purchase_id = None
+    if "review_purchase_consumed" not in st.session_state:
+        st.session_state.review_purchase_consumed = set()
+    if "review_purchase_consume_failed" not in st.session_state:
+        st.session_state.review_purchase_consume_failed = set()
 
 
 def get_query_param_value(key: str) -> str | None:
@@ -984,6 +992,10 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     if st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit"):
         st.session_state.review_context = None
         st.session_state.review_fortune = None
+        st.session_state.review_pdf_bytes = None
+        st.session_state.review_pdf_generated_purchase_id = None
+        if active_purchase.get("purchase_id"):
+            st.session_state.review_purchase_consume_failed.discard(active_purchase.get("purchase_id"))
         errors = validate_review_inputs(
             user_name=user_name,
             birth_date_selected=birth_date is not None,
@@ -1085,14 +1097,33 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
             st.session_state.review_fortune = review_fortune_result.get("review_fortune") or {}
 
+            try:
+                st.session_state.review_pdf_bytes = generate_review_fortune_pdf(
+                    review_fortune=st.session_state.review_fortune,
+                    review_context=review_context,
+                )
+                st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
+            except Exception as exc:
+                st.session_state.review_pdf_bytes = None
+                st.session_state.review_pdf_generated_purchase_id = None
+                st.error("見返し便PDFの生成中にエラーが発生しました。")
+                st.error("ページを再読み込みせず、時間をおいてもう一度お試しください。")
+                if SHOW_DEBUG:
+                    st.caption(
+                        f"error_type={type(exc).__name__} / "
+                        f"failed_step=generate_review_fortune_pdf / "
+                        f"purchase_id={active_purchase.get('purchase_id')} / "
+                        f"product_type={product_type}"
+                    )
+                return
+
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
             st.success("前回PDFの確認と要約が完了しました。")
             st.info(
                 f"添付いただいた前回の鑑定は、{previous_reading_date_label}のお告げとして読み取れました。\n\n"
                 "前回のお告げから現在までの流れを整理しました。\n\n"
                 "今回の見返し便では、前回のお告げを当たり外れで判断するのではなく、現在の手相・近況・見返したいテーマと重ねて、今あらためて見えてくる流れを読み直します。\n\n"
-                "見返し便の鑑定本文を生成しました。内容をご確認ください。\n\n"
-                "※PDF生成は次フェーズで実装予定です。"
+                "見返し便の鑑定本文とPDFを生成しました。内容をご確認ください。"
             )
             if SHOW_DEBUG:
                 timeline = review_context.get("review_context", {}).get("timeline_reinterpretation", {})
@@ -1112,7 +1143,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     if review_fortune:
         render_form_gap(2)
         st.markdown('<div class="heading-lg">📜 見返し便の鑑定本文</div>', unsafe_allow_html=True)
-        st.caption("※PDF生成は次フェーズで実装予定です。")
         review_fortune_sections = [
             ("はじめに", "intro"),
             ("前回のお告げから続いている流れ", "continuing_flow"),
@@ -1126,6 +1156,50 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         ]
         for title, key in review_fortune_sections:
             render_html_box(title, str(review_fortune.get(key) or ""))
+
+        review_pdf_bytes = st.session_state.get("review_pdf_bytes")
+        review_pdf_purchase_id = st.session_state.get("review_pdf_generated_purchase_id")
+        purchase_id = active_purchase.get("purchase_id")
+        if review_pdf_bytes and review_pdf_purchase_id == purchase_id:
+            today_text = datetime.date.today().strftime("%Y%m%d")
+            st.download_button(
+                label="見返し便PDFをダウンロードする",
+                data=review_pdf_bytes,
+                file_name=f"ryujin_review_fortune_{today_text}.pdf",
+                mime="application/pdf",
+                key=f"review_pdf_download_{purchase_id}",
+            )
+
+            consumed_purchase_ids = st.session_state.review_purchase_consumed
+            consume_failed_purchase_ids = st.session_state.review_purchase_consume_failed
+            if (
+                purchase_id
+                and purchase_id not in consumed_purchase_ids
+                and purchase_id not in consume_failed_purchase_ids
+            ):
+                record = get_purchase_record(purchase_id)
+                if (
+                    record
+                    and get_purchase_product_type(record) == PRODUCT_TYPE_REVIEW
+                    and is_purchase_ready(record)
+                ):
+                    try:
+                        consume_purchase(purchase_id, logger)
+                        consumed_purchase_ids.add(purchase_id)
+                        st.success("PDFの準備が完了しました。今回の購入分は使用済みになりました。")
+                    except Exception as exc:
+                        consume_failed_purchase_ids.add(purchase_id)
+                        logger.warning(
+                            "review_purchase_consume_failed",
+                            extra={
+                                "error_type": type(exc).__name__,
+                                "purchase_id": purchase_id,
+                                "product_type": PRODUCT_TYPE_REVIEW,
+                            },
+                        )
+                        st.warning("PDFはダウンロードできますが、購入状態の更新確認に失敗しました。時間をおいて再度ご確認ください。")
+        else:
+            st.warning("見返し便PDFの準備がまだ完了していません。もう一度生成をお試しください。")
 
 
 def render_pre_info() -> None:

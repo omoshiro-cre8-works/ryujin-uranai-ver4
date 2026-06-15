@@ -14,6 +14,19 @@ from reportlab.pdfgen import canvas
 from config import APP_TITLE, MIKO_IMAGE_PATH, PDF_FONT_PATHS
 from services.formatter_service import normalize_fortune_result
 
+REVIEW_PDF_TITLE = "龍神さまのお告げ 見返し便"
+REVIEW_FORTUNE_SECTION_TITLES = [
+    ("はじめに", "intro"),
+    ("前回のお告げから続いている流れ", "continuing_flow"),
+    ("現在の手相と近況から見える変化", "current_changes"),
+    ("今回のテーマについての見返し", "theme_review"),
+    ("これから3カ月ほど意識したいこと", "next_3_months"),
+    ("1年先に向けて整えていくこと", "one_year_guidance"),
+    ("龍神さまからの見返しの言葉", "ryujin_message"),
+    ("巫女の助言", "miko_advice"),
+    ("心に留めること", "things_to_remember"),
+]
+
 
 def register_japanese_font() -> str:
     for font_path in PDF_FONT_PATHS:
@@ -186,6 +199,144 @@ def wrap_text_by_char_count(text: str, width: int = 34) -> list[str]:
         paragraph_lines = rebalance_lines(paragraph_lines)
         lines.extend(paragraph_lines)
     return lines
+
+
+def build_review_pdf_sections(review_fortune: dict[str, Any]) -> list[tuple[str, str]]:
+    return [
+        (title, str((review_fortune or {}).get(key) or "").strip())
+        for title, key in REVIEW_FORTUNE_SECTION_TITLES
+    ]
+
+
+def _format_iso_date_japanese(value: str) -> str:
+    try:
+        parsed = datetime.datetime.strptime(str(value or ""), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return str(value or "")
+    return f"{parsed.year}年{parsed.month}月{parsed.day}日"
+
+
+def generate_review_fortune_pdf(
+    review_fortune: dict[str, Any],
+    review_context: dict[str, Any],
+) -> bytes:
+    context = (review_context or {}).get("review_context", {})
+    previous_pdf_analysis = context.get("previous_pdf_analysis", {}) or {}
+    current_inputs = context.get("current_inputs", {}) or {}
+    previous_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("previous_reading_date", ""))
+    current_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("current_reading_date", ""))
+    selected_theme = str(current_inputs.get("selected_theme") or "未選択")
+    sections = build_review_pdf_sections(review_fortune)
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    font_name = register_japanese_font()
+    page_num = 1
+
+    def draw_page_base() -> None:
+        c.setStrokeColor(HexColor("#8b0000"))
+        c.setLineWidth(2)
+        c.rect(10 * mm, 10 * mm, width - 20 * mm, height - 20 * mm)
+        c.setLineWidth(0.5)
+        c.rect(12 * mm, 12 * mm, width - 24 * mm, height - 24 * mm)
+        header_y = height - 24 * mm
+        c.setStrokeColor(HexColor("#d8b6a9"))
+        c.setLineWidth(0.8)
+        c.line(18 * mm, header_y, width - 18 * mm, header_y)
+        c.setFont(font_name, 11)
+        c.setFillColor(HexColor("#8b0000"))
+        c.drawString(22 * mm, height - 20.5 * mm, REVIEW_PDF_TITLE)
+        if os.path.exists(MIKO_IMAGE_PATH):
+            try:
+                c.drawImage(
+                    MIKO_IMAGE_PATH,
+                    width - 36.5 * mm,
+                    height - 22.0 * mm,
+                    width=18 * mm,
+                    height=18 * mm,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                    anchor="ne",
+                )
+            except Exception:
+                pass
+
+    def new_page() -> None:
+        nonlocal page_num, y
+        c.showPage()
+        page_num += 1
+        draw_page_base()
+        y = height - 31 * mm
+
+    draw_page_base()
+
+    c.setFont(font_name, 22)
+    c.setFillColor(HexColor("#8b0000"))
+    c.drawCentredString(width / 2, height - 40 * mm, REVIEW_PDF_TITLE)
+
+    today = datetime.date.today()
+    reiwa = today.year - 2018
+    c.setFont(font_name, 11)
+    c.setFillColor(HexColor("#000000"))
+    c.drawRightString(width - 25 * mm, height - 52 * mm, f"令和 {reiwa}年 {today.month}月 {today.day}日")
+
+    y = height - 68 * mm
+    line_h = 7.2 * mm
+    c.setFont(font_name, 12)
+    for label, value in [
+        ("前回のお告げ", previous_reading_date),
+        ("今回の見返し", current_reading_date),
+        ("見返しテーマ", selected_theme),
+    ]:
+        if value:
+            c.drawString(30 * mm, y, f"{label}：{value}")
+            y -= line_h
+
+    y -= 6 * mm
+
+    def add_section(title: str, text: str) -> None:
+        nonlocal y
+        if not text:
+            return
+        wrapped_lines = wrap_text_by_char_count(text, width=33)
+        min_needed_lines = min(max(len(wrapped_lines), 1), 3)
+        min_needed = line_h * (1 + min_needed_lines) + 5 * mm
+        if y < 22 * mm + min_needed:
+            new_page()
+
+        c.setFont(font_name, 14)
+        c.setFillColor(HexColor("#8b0000"))
+        c.drawString(25 * mm, y, f"【{title}】")
+        y -= line_h
+
+        c.setFont(font_name, 11)
+        c.setFillColor(HexColor("#000000"))
+        for i, line in enumerate(wrapped_lines):
+            remaining_lines = len(wrapped_lines) - i
+            if y < 22 * mm + (line_h * min(remaining_lines, 2)):
+                new_page()
+                c.setFont(font_name, 11)
+                c.setFillColor(HexColor("#000000"))
+            if line == "":
+                y -= line_h * 0.7
+                continue
+            c.drawString(30 * mm, y, line)
+            y -= line_h
+        y -= 3 * mm
+
+    for title, text in sections:
+        add_section(title, text)
+
+    add_section("結び", "ここに記した見返しの言葉が、これからの日々を静かに整える手がかりとなりますように。")
+
+    c.setFont(font_name, 10)
+    c.setFillColor(HexColor("#000000"))
+    c.drawRightString(width - 25 * mm, 18 * mm, "龍神湖神社 巫女 拝")
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def generate_miko_letter_pdf(user_name: str, fortune_data: dict[str, Any]) -> bytes:
