@@ -43,7 +43,12 @@ from services.firestore_service import (
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
 )
-from services.fortune_service import build_image_parts, call_gemini_fortune
+from services.fortune_service import (
+    build_image_parts,
+    build_review_context,
+    call_gemini_fortune,
+    call_gemini_review_pdf_summary,
+)
 from services.ga4_service import send_ga4_event
 from services.pdf_service import generate_miko_letter_pdf
 from services.validation_service import (
@@ -140,6 +145,8 @@ def init_session_state() -> None:
         st.session_state.ga4_form_displayed_purchase_ids = set()
     if "ga4_pdf_generated_purchase_ids" not in st.session_state:
         st.session_state.ga4_pdf_generated_purchase_ids = set()
+    if "review_context" not in st.session_state:
+        st.session_state.review_context = None
 
 
 def get_query_param_value(key: str) -> str | None:
@@ -992,8 +999,9 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
                 st.stop()
 
+            uploaded_pdf_bytes = uploaded_pdf.getvalue()
             with st.spinner("前回PDFを確認しています..."):
-                pdf_analysis = validate_review_pdf_content(uploaded_pdf.getvalue())
+                pdf_analysis = validate_review_pdf_content(uploaded_pdf_bytes)
 
             if not pdf_analysis.get("is_valid_previous_pdf"):
                 st.error("アップロードされたPDFから、前回の「龍神さまのお告げ」鑑定PDFであることを十分に確認できませんでした。")
@@ -1008,22 +1016,55 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 st.error("前回お届けした「龍神さまのお告げ」の鑑定PDFかどうかをご確認のうえ、再アップロードしてください。")
                 return
 
+            with st.spinner("前回のお告げを要約し、時間の流れを整理しています..."):
+                pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
+
+            if not pdf_summary.get("summary_success"):
+                st.error("前回PDFの要約中にエラーが発生しました。")
+                st.error("時間をおいてもう一度お試しください。")
+                if SHOW_DEBUG:
+                    diagnostics = pdf_summary.get("diagnostics") or {}
+                    st.caption(
+                        f"failed_step={diagnostics.get('failed_step', '')} / "
+                        f"error_type={diagnostics.get('error_type', '')} / "
+                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)} / "
+                        f"pdf_size_bytes={diagnostics.get('pdf_size_bytes', len(uploaded_pdf_bytes))} / "
+                        f"mime_type={diagnostics.get('mime_type', 'application/pdf')}"
+                    )
+                return
+
+            review_context = build_review_context(
+                pdf_analysis=pdf_analysis,
+                previous_summary=pdf_summary.get("previous_summary") or {},
+                current_inputs={
+                    "birth_time_text": review_birth_time_text,
+                    "selected_theme": review_theme,
+                    "review_memo_present": bool(normalize_text(review_memo)),
+                    "palm_image_count": len(uploaded_files or []),
+                },
+            )
+            st.session_state.review_context = review_context
+
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
-            st.success("前回PDFの確認が完了しました。")
+            st.success("前回PDFの確認と要約が完了しました。")
             st.info(
                 f"添付いただいた前回の鑑定は、{previous_reading_date_label}のお告げとして読み取れました。\n\n"
-                "今回は、その時のお告げから現在までの流れと、現在の手相・近況を踏まえて、運勢の見直しを行う準備ができました。\n\n"
-                "見返し便の鑑定生成は次フェーズで実装予定です。"
+                "前回のお告げから現在までの流れを整理しました。\n\n"
+                "今回の見返し便では、前回のお告げを当たり外れで判断するのではなく、現在の手相・近況・見返したいテーマと重ねて、今あらためて見えてくる流れを読み直します。\n\n"
+                "見返し便の鑑定本文生成は次フェーズで実装予定です。"
             )
             if SHOW_DEBUG:
-                pdf_size = len(uploaded_pdf.getvalue()) if uploaded_pdf is not None else 0
+                timeline = review_context.get("review_context", {}).get("timeline_reinterpretation", {})
                 st.caption(
                     f"review_pdf_uploaded={uploaded_pdf is not None} / "
-                    f"review_pdf_size_bytes={pdf_size} / "
+                    f"review_pdf_size_bytes={len(uploaded_pdf_bytes)} / "
                     f"review_image_count={len(uploaded_files or [])} / "
-                    f"review_birth_time={review_birth_time_text} / "
+                    f"review_birth_time_present={review_birth_time_text != '不明'} / "
                     f"previous_reading_date_confidence={pdf_analysis.get('previous_reading_date_confidence')} / "
-                    f"days_since_previous_reading={pdf_analysis.get('days_since_previous_reading')}"
+                    f"days_since_previous_reading={pdf_analysis.get('days_since_previous_reading')} / "
+                    f"recent_3_months_status={timeline.get('recent_3_months_status')} / "
+                    f"one_year_status={timeline.get('one_year_status')} / "
+                    f"two_to_three_years_status={timeline.get('two_to_three_years_status')}"
                 )
 
 

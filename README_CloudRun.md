@@ -32,7 +32,7 @@ Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に
 決済後は URL クエリではなく、Firestore の purchase に保存された `product_type` を正本として扱います。
 
 第2弾では、見返し便フォーム、前回鑑定PDFアップロード欄、PDF形式・サイズの基本チェックを追加しています。
-Gemini による前回PDF内容判定、前回PDF要約、見返し便鑑定生成、見返し便用PDF生成は未実装です。
+第3弾Aでは Gemini による前回PDF内容判定と前回鑑定日抽出を追加しています。第3弾Bでは前回PDF要約、時間軸再分類、現在入力情報との統合用中間データ作成までを追加しています。見返し便鑑定生成、見返し便用PDF生成は未実装です。
 
 ## GA4 Measurement Protocol 用の任意環境変数
 - GA4_ENABLED=false
