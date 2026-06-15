@@ -635,7 +635,7 @@ def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
     if product_type == PRODUCT_TYPE_REVIEW:
         price_note = (
             f"販売予定価格は{REVIEW_PLANNED_AMOUNT_JPY}円（税込）です。<br>"
-            f"現在は、はじめての見返し便として、しばらくの間はスタート記念価格{active_amount_jpy}円（税込）でご案内しています。"
+            f'<strong style="color:#b14d2c;">現在は、はじめての見返し便として、しばらくの間はスタート記念価格{active_amount_jpy}円（税込）でご案内しています。</strong>'
         )
         review_note = (
             '<div style="margin-top:0.55rem;">'
