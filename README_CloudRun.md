@@ -22,6 +22,7 @@
 - GEMINI_MODEL=gemini-2.5-flash
 - STRIPE_SECRET_KEY
 - STRIPE_PRICE_ID_REGULAR
+- STRIPE_REVIEW_PRICE_ID
 
 ## 商品種別 product_type
 - `product_type=regular`: 通常版（既定）
@@ -33,6 +34,8 @@ Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に
 
 第2弾では、見返し便フォーム、前回鑑定PDFアップロード欄、PDF形式・サイズの基本チェックを追加しています。
 第3弾Aでは Gemini による前回PDF内容判定と前回鑑定日抽出を追加しています。第3弾Bでは前回PDF要約、時間軸再分類、現在入力情報との統合用中間データ作成までを追加しています。第4弾では見返し便鑑定本文生成と画面表示を追加しています。第5弾では見返し便PDF生成、ダウンロードボタン表示、PDF準備完了後の購入分使用済み更新を追加しています。
+
+見返し便の販売予定価格は780円（税込）です。現在は、はじめての見返し便として、しばらくの間はスタート記念価格680円（税込）で案内する想定です。Stripeで当面作成するPriceは680円（税込）とし、そのPrice IDを `STRIPE_REVIEW_PRICE_ID` としてCloud Runに設定します。
 
 ## GA4 Measurement Protocol 用の任意環境変数
 - GA4_ENABLED=false
@@ -60,14 +63,28 @@ https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?utm_source=instagram&
 
 ## Stripe キャンペーン切り替え用の任意環境変数
 - STRIPE_PRICE_ID_CAMPAIGN
-- STRIPE_PRICE_ID_REVIEW
+- STRIPE_REVIEW_PRICE_ID
 - STRIPE_PRICE_ID_REVIEW_CAMPAIGN
 - REVIEW_AMOUNT_JPY
+- REVIEW_PLANNED_AMOUNT_JPY
 - REVIEW_CAMPAIGN_AMOUNT_JPY
 - MAX_REVIEW_PDF_SIZE_MB
 - MAX_REVIEW_MEMO_LENGTH
 - CAMPAIGN_END_AT
 - CAMPAIGN_TIMEZONE
+
+## 見返し便 本番販売前チェックリスト
+- Stripeで見返し便用Product/Priceを作成する
+- 当面のPriceは680円（税込）で作成する
+- 将来の販売予定価格は780円（税込）として扱う
+- Price IDを `STRIPE_REVIEW_PRICE_ID` としてCloud Runに設定する
+- Cloud Run再デプロイまたは環境変数反映後、見返し便ページでCheckout作成を確認する
+- Stripe metadata `product_type=review` を確認する
+- Firestore `purchase.product_type=review` を確認する
+- 見返し便購入後フォームが表示されることを確認する
+- PDF生成・ダウンロード・used_flag更新を確認する
+- Wix導線 `https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?product_type=review` を追加する
+- 通常版PDF末尾導線を確認する
 
 ## Stripe 価格切り替えの挙動
 - `STRIPE_PRICE_ID_CAMPAIGN` と `CAMPAIGN_END_AT` の両方が設定されている間のみ、キャンペーン価格を使います。

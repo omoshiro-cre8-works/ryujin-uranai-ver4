@@ -86,13 +86,15 @@ def get_int_env(key: str, default: int) -> int:
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PRICE_ID_REGULAR = os.getenv("STRIPE_PRICE_ID_REGULAR", os.getenv("STRIPE_PRICE_ID", ""))
 STRIPE_PRICE_ID_CAMPAIGN = os.getenv("STRIPE_PRICE_ID_CAMPAIGN", "")
-STRIPE_PRICE_ID_REVIEW = os.getenv("STRIPE_PRICE_ID_REVIEW", "")
+STRIPE_REVIEW_PRICE_ID = os.getenv("STRIPE_REVIEW_PRICE_ID", os.getenv("STRIPE_PRICE_ID_REVIEW", ""))
+STRIPE_PRICE_ID_REVIEW = STRIPE_REVIEW_PRICE_ID
 STRIPE_PRICE_ID_REVIEW_CAMPAIGN = os.getenv("STRIPE_PRICE_ID_REVIEW_CAMPAIGN", "")
 CAMPAIGN_END_AT = os.getenv("CAMPAIGN_END_AT", "").strip()
 CAMPAIGN_TIMEZONE = os.getenv("CAMPAIGN_TIMEZONE", "Asia/Tokyo").strip() or "Asia/Tokyo"
 REGULAR_AMOUNT_JPY = 300
 CAMPAIGN_AMOUNT_JPY = 100
-REVIEW_AMOUNT_JPY = get_int_env("REVIEW_AMOUNT_JPY", 980)
+REVIEW_PLANNED_AMOUNT_JPY = get_int_env("REVIEW_PLANNED_AMOUNT_JPY", 780)
+REVIEW_AMOUNT_JPY = get_int_env("REVIEW_AMOUNT_JPY", 680)
 REVIEW_CAMPAIGN_AMOUNT_JPY = get_int_env("REVIEW_CAMPAIGN_AMOUNT_JPY", REVIEW_AMOUNT_JPY)
 STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
 PRODUCT_TYPE_REGULAR = "regular"
@@ -445,7 +447,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
     product_type = normalize_product_type(product_type)
     if not stripe_client_ready(product_type):
         if product_type == PRODUCT_TYPE_REVIEW:
-            return None, "Stripe の設定が不足しています。環境変数 STRIPE_PRICE_ID_REVIEW を確認してください。"
+            return None, "見返し便の決済設定がまだ完了していません。環境変数 STRIPE_REVIEW_PRICE_ID を確認してください。"
         return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を確認してください。"
 
     active_price_id, active_amount_jpy = get_active_checkout_price(product_type, logger)
@@ -629,15 +631,24 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
 def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
     product_name = html.escape(get_product_display_name(product_type))
     review_note = ""
+    price_note = f"1回{active_amount_jpy}円（税込）でご利用いただけます。"
     if product_type == PRODUCT_TYPE_REVIEW:
-        review_note = '<div style="margin-top:0.55rem;">※見返し便フォームは次フェーズで実装予定です。</div>'
+        price_note = (
+            f"販売予定価格は{REVIEW_PLANNED_AMOUNT_JPY}円（税込）です。<br>"
+            f"現在は、はじめての見返し便として、しばらくの間はスタート記念価格{active_amount_jpy}円（税込）でご案内しています。"
+        )
+        review_note = (
+            '<div style="margin-top:0.55rem;">'
+            "前回のお告げPDFをもとに、今の手相画像・近況・見返したいテーマを重ねて、運勢の流れをあらためて読み直します。"
+            "</div>"
+        )
     st.markdown(
         f'''
         <div style="border:1px solid #eadfd8; background:#fffdf9; border-radius:14px; padding:16px 18px; margin:0.4rem 0 1rem 0; color:#3b312d; line-height:1.8;">
             <div>ここは、ケモノ町の龍神さまから、今のあなたへひとつ言葉を受け取るためのページです。</div>
             <div style="font-weight:700; margin-top:0.55rem;">商品種別：{product_name}</div>
             <div style="margin-top:0.55rem;">所要時間は3〜5分ほどです。</div>
-            <div>1回{active_amount_jpy}円（税込）でご利用いただけます。</div>
+            <div>{price_note}</div>
             <div>決済完了後、この画面に戻ると入力フォームが表示されます。</div>
             {review_note}
         </div>

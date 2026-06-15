@@ -136,17 +136,34 @@ Wix LP から見返し便へ遷移する場合は、同じ Cloud Run URL に `?p
 見返し便用の環境変数候補:
 
 ```text
-STRIPE_PRICE_ID_REVIEW=
+STRIPE_REVIEW_PRICE_ID=
 STRIPE_PRICE_ID_REVIEW_CAMPAIGN=
-REVIEW_AMOUNT_JPY=980
-REVIEW_CAMPAIGN_AMOUNT_JPY=980
+REVIEW_AMOUNT_JPY=680
+REVIEW_PLANNED_AMOUNT_JPY=780
+REVIEW_CAMPAIGN_AMOUNT_JPY=680
 MAX_REVIEW_PDF_SIZE_MB=10
 MAX_REVIEW_MEMO_LENGTH=1200
 ```
 
+見返し便の販売予定価格は780円（税込）です。現在は、はじめての見返し便として、しばらくの間はスタート記念価格680円（税込）で案内する想定です。Stripeで当面作成するPriceは680円（税込）とし、そのPrice IDを `STRIPE_REVIEW_PRICE_ID` として設定します。旧名 `STRIPE_PRICE_ID_REVIEW` は後方互換のフォールバックとして扱いますが、新規設定では `STRIPE_REVIEW_PRICE_ID` を使ってください。
+
 見返し便フォームでは、前回鑑定PDF、姓名、生年月日、出生時間（任意）、現在の手相画像、今回とくに見返したいテーマ、近況メモを入力できます。第3弾AではGeminiで前回PDFが「龍神さまのお告げ」の鑑定PDFらしいかを確認し、前回鑑定日と主要章を抽出します。第3弾Bでは、前回PDFの構造化要約、前回鑑定日から今回鑑定日までの時間軸再分類、現在入力情報との統合用中間データ作成までを行います。第4弾では、統合用中間データと現在の手相画像・近況メモをもとに見返し便鑑定本文を章立てで生成し、画面に表示します。第5弾では、生成済みの見返し便本文をPDF化し、ダウンロードボタンを表示できた後に購入分を使用済みにします。
 
 将来の見返し鑑定本文では、添付された前回鑑定を「YYYY年M月D日のお告げ」として読み取り、姓名や生年月日から見る本質的傾向は変わらない土台として扱います。そのうえで、前回のお告げから現在までの時間の流れ、現在の手相、近況、今回見返したいテーマを重ね合わせ、今あらためて見えてくる運勢の流れを読み直します。
+
+### 見返し便 本番販売前チェックリスト
+
+- Stripeで見返し便用Product/Priceを作成する
+- 当面のPriceは680円（税込）で作成する
+- 将来の販売予定価格は780円（税込）として扱う
+- Price IDを `STRIPE_REVIEW_PRICE_ID` としてCloud Runに設定する
+- Cloud Run再デプロイまたは環境変数反映後、見返し便ページでCheckout作成を確認する
+- Stripe metadata `product_type=review` を確認する
+- Firestore `purchase.product_type=review` を確認する
+- 見返し便購入後フォームが表示されることを確認する
+- PDF生成・ダウンロード・used_flag更新を確認する
+- Wix導線 `https://ai-uranai-h1-155905710900.asia-northeast2.run.app/?product_type=review` を追加する
+- 通常版PDF末尾導線を確認する
 
 ---
 
