@@ -150,6 +150,8 @@ def init_session_state() -> None:
         st.session_state.review_context = None
     if "review_fortune" not in st.session_state:
         st.session_state.review_fortune = None
+    if "review_fortune_purchase_id" not in st.session_state:
+        st.session_state.review_fortune_purchase_id = None
     if "review_pdf_bytes" not in st.session_state:
         st.session_state.review_pdf_bytes = None
     if "review_pdf_generated_purchase_id" not in st.session_state:
@@ -992,10 +994,20 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     if st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit"):
         st.session_state.review_context = None
         st.session_state.review_fortune = None
+        st.session_state.review_fortune_purchase_id = None
         st.session_state.review_pdf_bytes = None
         st.session_state.review_pdf_generated_purchase_id = None
         if active_purchase.get("purchase_id"):
             st.session_state.review_purchase_consume_failed.discard(active_purchase.get("purchase_id"))
+
+        record = get_purchase_record(active_purchase.get("purchase_id"))
+        if get_purchase_product_type(record) != PRODUCT_TYPE_REVIEW:
+            st.error("見返し便の購入情報を確認できませんでした。ページを再読み込みして状態をご確認ください。")
+            st.stop()
+        if not is_purchase_ready(record):
+            st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+            st.stop()
+
         errors = validate_review_inputs(
             user_name=user_name,
             birth_date_selected=birth_date is not None,
@@ -1011,11 +1023,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             for err in list(dict.fromkeys(errors)):
                 st.error(err)
         else:
-            record = get_purchase_record(active_purchase.get("purchase_id"))
-            if not is_purchase_ready(record):
-                st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
-                st.stop()
-
             uploaded_pdf_bytes = uploaded_pdf.getvalue()
             with st.spinner("前回PDFを確認しています..."):
                 pdf_analysis = validate_review_pdf_content(uploaded_pdf_bytes)
@@ -1096,6 +1103,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 return
 
             st.session_state.review_fortune = review_fortune_result.get("review_fortune") or {}
+            st.session_state.review_fortune_purchase_id = active_purchase.get("purchase_id")
 
             try:
                 st.session_state.review_pdf_bytes = generate_review_fortune_pdf(
@@ -1140,7 +1148,8 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 )
 
     review_fortune = st.session_state.get("review_fortune")
-    if review_fortune:
+    purchase_id = active_purchase.get("purchase_id")
+    if review_fortune and st.session_state.get("review_fortune_purchase_id") == purchase_id:
         render_form_gap(2)
         st.markdown('<div class="heading-lg">📜 見返し便の鑑定本文</div>', unsafe_allow_html=True)
         review_fortune_sections = [
@@ -1159,7 +1168,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
         review_pdf_bytes = st.session_state.get("review_pdf_bytes")
         review_pdf_purchase_id = st.session_state.get("review_pdf_generated_purchase_id")
-        purchase_id = active_purchase.get("purchase_id")
         if review_pdf_bytes and review_pdf_purchase_id == purchase_id:
             today_text = datetime.date.today().strftime("%Y%m%d")
             st.download_button(
@@ -1177,27 +1185,27 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 and purchase_id not in consumed_purchase_ids
                 and purchase_id not in consume_failed_purchase_ids
             ):
-                record = get_purchase_record(purchase_id)
-                if (
-                    record
-                    and get_purchase_product_type(record) == PRODUCT_TYPE_REVIEW
-                    and is_purchase_ready(record)
-                ):
-                    try:
+                try:
+                    record = get_purchase_record(purchase_id)
+                    if (
+                        record
+                        and get_purchase_product_type(record) == PRODUCT_TYPE_REVIEW
+                        and is_purchase_ready(record)
+                    ):
                         consume_purchase(purchase_id, logger)
                         consumed_purchase_ids.add(purchase_id)
                         st.success("PDFの準備が完了しました。今回の購入分は使用済みになりました。")
-                    except Exception as exc:
-                        consume_failed_purchase_ids.add(purchase_id)
-                        logger.warning(
-                            "review_purchase_consume_failed",
-                            extra={
-                                "error_type": type(exc).__name__,
-                                "purchase_id": purchase_id,
-                                "product_type": PRODUCT_TYPE_REVIEW,
-                            },
-                        )
-                        st.warning("PDFはダウンロードできますが、購入状態の更新確認に失敗しました。時間をおいて再度ご確認ください。")
+                except Exception as exc:
+                    consume_failed_purchase_ids.add(purchase_id)
+                    logger.warning(
+                        "review_purchase_consume_failed",
+                        extra={
+                            "error_type": type(exc).__name__,
+                            "purchase_id": purchase_id,
+                            "product_type": PRODUCT_TYPE_REVIEW,
+                        },
+                    )
+                    st.warning("PDFはダウンロードできますが、購入状態の更新確認に失敗しました。時間をおいて再度ご確認ください。")
         else:
             st.warning("見返し便PDFの準備がまだ完了していません。もう一度生成をお試しください。")
 
