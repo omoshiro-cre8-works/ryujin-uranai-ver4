@@ -1514,12 +1514,12 @@ def main() -> None:
 
     active_purchase = get_current_purchase_record()
     requested_product_type = get_requested_product_type()
-    tracking_product_type = (
+    display_product_type = (
         get_purchase_product_type(active_purchase)
         if active_purchase and active_purchase.get("payment_status") == "paid"
         else requested_product_type
     )
-    track_streamlit_page_view(logger, tracking_product_type)
+    track_streamlit_page_view(logger, display_product_type)
 
     if active_purchase and active_purchase.get("used_flag"):
         render_completion_screen()
@@ -1527,7 +1527,7 @@ def main() -> None:
 
     render_header()
 
-    active_purchase = render_payment_section(requested_product_type, logger)
+    active_purchase = render_payment_section(display_product_type, logger)
     render_notice_box()
     render_form_gap(2)
 
