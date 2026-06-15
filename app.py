@@ -42,6 +42,7 @@ from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
+    get_purchase_by_access_token,
 )
 from services.fortune_service import (
     build_image_parts,
@@ -231,8 +232,17 @@ def get_checkout_price_type(product_type: str, price_id: str) -> str:
     return "regular"
 
 
-def build_checkout_success_url() -> str:
-    query_parts = ["session_id={CHECKOUT_SESSION_ID}"]
+def build_checkout_success_url(purchase_id: str, access_token: str, product_type: str) -> str:
+    query_parts = [
+        "session_id={CHECKOUT_SESSION_ID}",
+        urllib.parse.urlencode(
+            {
+                "purchase_id": purchase_id,
+                "access_token": access_token,
+                "product_type": normalize_product_type(product_type),
+            }
+        ),
+    ]
     utm_params = get_utm_params()
     if utm_params:
         query_parts.append(urllib.parse.urlencode(utm_params))
@@ -465,7 +475,11 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
                     "quantity": 1,
                 }
             ],
-            success_url=build_checkout_success_url(),
+            success_url=build_checkout_success_url(
+                purchase_id=purchase_id,
+                access_token=str(record.get("access_token") or ""),
+                product_type=product_type,
+            ),
             cancel_url=WIX_CANCEL_URL,
             client_reference_id=purchase_id,
             metadata={
@@ -508,7 +522,9 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
 
 
 def retrieve_checkout_session(session_id: str) -> Any | None:
-    if not session_id or not stripe_client_ready():
+    if not session_id:
+        return None
+    if not stripe_client_ready(PRODUCT_TYPE_REGULAR) and not stripe_client_ready(PRODUCT_TYPE_REVIEW):
         return None
     try:
         assert stripe is not None
@@ -599,8 +615,17 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> None:
 
 def get_current_purchase_record() -> dict[str, Any] | None:
     session_id = st.query_params.get("session_id")
+    access_token = get_query_param_value("access_token")
+    purchase_id = get_query_param_value("purchase_id")
     if session_id:
-        return sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
+        synced_record = sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
+        if synced_record:
+            return synced_record
+    if access_token:
+        token_record = get_purchase_by_access_token(access_token)
+        if token_record and (not purchase_id or str(token_record.get("purchase_id") or "") == purchase_id):
+            st.session_state.active_purchase_id = token_record.get("purchase_id")
+            return token_record
     active_purchase_id = st.session_state.get("active_purchase_id")
     return get_purchase_record(active_purchase_id)
 
