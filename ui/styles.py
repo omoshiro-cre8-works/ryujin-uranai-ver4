@@ -147,6 +147,12 @@ def render_app_css() -> None:
             font-weight: 500 !important;
         }
 
+        .stMarkdown .review-start-price,
+        .review-start-price {
+            color: #b14d2c !important;
+            font-weight: 700 !important;
+        }
+
         .title-main + .result-body {
             color: #5f5f5f !important;
             font-weight: 500;
