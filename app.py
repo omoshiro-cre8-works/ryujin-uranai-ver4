@@ -1134,6 +1134,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 return
 
             with st.spinner("見返し便の鑑定本文を生成しています..."):
+                palm_image_count = len(uploaded_files or [])
                 review_fortune_result = call_gemini_review_fortune(
                     review_context=review_context,
                     current_private_inputs={
@@ -1142,6 +1143,8 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                         "birth_time_text": review_birth_time_text,
                         "selected_theme": review_theme,
                         "review_memo": normalize_text(review_memo),
+                        "palm_image_count": palm_image_count,
+                        "current_palm_image_status": "attached" if palm_image_count > 0 else "not_attached",
                     },
                     image_parts=image_parts,
                 )
@@ -1182,11 +1185,16 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 return
 
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
+            current_reference_text = (
+                "現在の手相・近況・見返したいテーマ"
+                if len(uploaded_files or []) > 0
+                else "現在の近況・見返したいテーマ"
+            )
             st.success("前回PDFの確認と要約が完了しました。")
             st.info(
                 f"添付いただいた前回の鑑定は、{previous_reading_date_label}のお告げとして読み取れました。\n\n"
                 "前回のお告げから現在までの流れを整理しました。\n\n"
-                "今回の見返し便では、前回のお告げを当たり外れで判断するのではなく、現在の手相・近況・見返したいテーマと重ねて、今あらためて見えてくる流れを読み直します。\n\n"
+                f"今回の見返し便では、前回のお告げを当たり外れで判断するのではなく、{current_reference_text}と重ねて、今あらためて見えてくる流れを読み直します。\n\n"
                 "見返し便の鑑定本文とPDFを生成しました。内容をご確認ください。"
             )
             if SHOW_DEBUG:
@@ -1206,6 +1214,19 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     review_fortune = st.session_state.get("review_fortune")
     purchase_id = active_purchase.get("purchase_id")
     if review_fortune and st.session_state.get("review_fortune_purchase_id") == purchase_id:
+        stored_review_context = st.session_state.get("review_context") or {}
+        stored_current_inputs = (
+            (stored_review_context.get("review_context") or {}).get("current_inputs") or {}
+        )
+        try:
+            has_current_palm_images = int(stored_current_inputs.get("palm_image_count") or 0) > 0
+        except (TypeError, ValueError):
+            has_current_palm_images = False
+        current_changes_title = (
+            "現在の手相と近況から見える変化"
+            if has_current_palm_images
+            else "現在の近況から見える変化"
+        )
         render_form_gap(2)
         st.markdown('<div class="heading-lg">📜 見返し便の鑑定本文</div>', unsafe_allow_html=True)
         raw_review_summary_points = review_fortune.get("review_summary_points")
@@ -1220,7 +1241,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         review_fortune_sections = [
             ("はじめに", "intro"),
             ("前回のお告げから続いている流れ", "continuing_flow"),
-            ("現在の手相と近況から見える変化", "current_changes"),
+            (current_changes_title, "current_changes"),
             ("今回のテーマについての見返し", "theme_review"),
             ("これから3カ月ほど意識したいこと", "next_3_months"),
             ("1年先に向けて整えていくこと", "one_year_guidance"),

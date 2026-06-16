@@ -18,7 +18,6 @@ REVIEW_PDF_TITLE = "龍神さまのお告げ 見返し便"
 REVIEW_FORTUNE_SECTION_TITLES = [
     ("はじめに", "intro"),
     ("前回のお告げから続いている流れ", "continuing_flow"),
-    ("現在の手相と近況から見える変化", "current_changes"),
     ("今回のテーマについての見返し", "theme_review"),
     ("これから3カ月ほど意識したいこと", "next_3_months"),
     ("1年先に向けて整えていくこと", "one_year_guidance"),
@@ -214,6 +213,21 @@ def build_review_pdf_sections(review_fortune: dict[str, Any]) -> list[tuple[str,
     ]
 
 
+def _has_current_palm_images(review_context: dict[str, Any]) -> bool:
+    context = (review_context or {}).get("review_context", {})
+    current_inputs = context.get("current_inputs", {}) or {}
+    try:
+        return int(current_inputs.get("palm_image_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _current_changes_title(review_context: dict[str, Any]) -> str:
+    if _has_current_palm_images(review_context):
+        return "現在の手相と近況から見える変化"
+    return "現在の近況から見える変化"
+
+
 def _clean_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -285,13 +299,19 @@ def generate_review_fortune_pdf(
     current_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("current_reading_date", ""))
     selected_theme = str(current_inputs.get("selected_theme") or "未選択")
     base_sections = build_review_pdf_sections(review_fortune)
+    current_changes_section = (
+        _current_changes_title(review_context),
+        str((review_fortune or {}).get("current_changes") or "").strip(),
+    )
     sections = [
         ("今回の見返しポイント", _format_review_summary_points(review_fortune)),
         base_sections[0],
         ("前回のお告げと現在の照らし合わせ", _format_comparison_blocks(review_fortune)),
-        *base_sections[1:4],
+        base_sections[1],
+        current_changes_section,
+        base_sections[2],
         ("これから3カ月の小さな行動", _format_next_3_month_action_items(review_fortune)),
-        *base_sections[4:],
+        *base_sections[3:],
     ]
 
     buffer = io.BytesIO()

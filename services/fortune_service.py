@@ -377,6 +377,28 @@ def build_review_fortune_prompt(
 ) -> str:
     safe_context_json = json.dumps(review_context, ensure_ascii=False, indent=2)
     private_inputs_json = json.dumps(current_private_inputs, ensure_ascii=False, indent=2)
+    current_inputs = (review_context or {}).get('review_context', {}).get('current_inputs', {}) or {}
+    palm_image_count = int(current_inputs.get('palm_image_count') or 0)
+    has_current_palm_images = palm_image_count > 0
+    palm_image_instruction = (
+        f"現在の手相画像は {palm_image_count} 枚添付されています。画像から読み取れる現在の状態や変化の手がかりを、"
+        "前回PDF要約、時間軸再分類、相談テーマ、近況メモと重ねてください。本文では「今回の手相画像から読み取れる範囲では」など、画像に基づく範囲を明示してください。"
+        if has_current_palm_images
+        else
+        "今回は現在の手相画像が添付されていません。現在の手相を新たに読み取ったような表現はしないでください。前回PDF内の手相情報に触れる場合は「前回鑑定に記された手相の傾向」と明示し、現在の近況メモと見返しテーマを中心に照合してください。"
+    )
+    current_status_example = (
+        "今回の近況・現在の手相画像・見返しテーマから見える現在の状態"
+        if has_current_palm_images
+        else
+        "今回の近況・見返しテーマから見える現在の状態"
+    )
+    current_reference_text = (
+        "今回の手相画像・近況・見返しテーマ"
+        if has_current_palm_images
+        else
+        "今回の近況・見返しテーマ"
+    )
     return f"""
 AIうらない「龍神さまのお告げ 見返し便」の鑑定本文を生成してください。
 
@@ -389,9 +411,9 @@ review_context:
 current_private_inputs:
 {private_inputs_json}
 
-現在の手相画像も添付されています。画像から読み取れる現在の状態や変化の手がかりを、前回PDF要約、時間軸再分類、相談テーマ、近況メモと重ねてください。
+{palm_image_instruction}
 
-見返し便の回答は、ユーザーの近況に合わせた一般的な助言ではなく、前回鑑定で用いた手相・姓名判断・四柱推命・西洋占星術の読み取りを前提に、今回の手相画像・近況・見返しテーマを照合して作成してください。
+見返し便の回答は、ユーザーの近況に合わせた一般的な助言ではなく、前回鑑定で用いた手相・姓名判断・四柱推命・西洋占星術の読み取りを前提に、{current_reference_text}を照合して作成してください。
 見返しサマリー、比較ブロック、3カ月の行動提案も、必ず占術上の示唆や前回鑑定の時間軸とのつながりを踏まえてください。
 
 必ずJSONのみで返してください。章立ては以下のキーに対応させてください。
@@ -404,7 +426,7 @@ current_private_inputs:
       {{
         "theme": "近況メモと見返しテーマに応じたテーマ名",
         "previous_message": "前回のお告げで、手相・姓名判断・四柱推命・西洋占星術の読み取りから示されていたこと",
-        "current_status": "今回の近況・現在の手相画像・見返しテーマから見える現在の状態",
+        "current_status": "{current_status_example}",
         "reinterpretation": "前回鑑定の占術的示唆と時間軸を踏まえた今回の読み直し"
       }}
     ],
@@ -428,7 +450,8 @@ current_private_inputs:
 - timeline_reinterpretation の status と note。
 - 前回PDF要約の内容。
 - 前回PDFから抽出された手相・姓名判断・四柱推命・西洋占星術の占術結果を、単なる背景情報ではなく、見返し鑑定の根拠として扱う。
-- 現在の手相画像から読み取れる今回時点の手がかり。
+- 現在の手相画像が添付されている場合のみ、画像から読み取れる今回時点の手がかり。
+- 現在の手相画像が添付されていない場合は、手相からの新たな読み取りは行わず、前回鑑定に記された手相の傾向と現在の近況メモを中心に見返すこと。
 - 今回とくに見返したいテーマ。
 - 近況メモに書かれた本人の現実感。
 - review_summary_points は4〜5項目程度。前回PDFを読み込んだからこそ分かる、前回のお告げ・占術上の示唆・現在の状況・テーマ・時間軸のつながりを短く分かりやすく書く。抽象的な励ましだけにしない。
@@ -437,10 +460,13 @@ current_private_inputs:
 
 重要な解釈方針:
 - 見返し便では、前回鑑定の単なる要約や言い換えに終わらせない。
-- 必ず「前回のお告げで占術上示されていたこと」「今回の近況・現在の手相から見える現在の状態」「それを踏まえた今回の読み直し」を分けて書く。
+- 必ず「前回のお告げで占術上示されていたこと」「今回の近況と、手相画像がある場合のみ現在の手相から見える現在の状態」「それを踏まえた今回の読み直し」を分けて書く。
 - 特に「直近3カ月」「1年先」「2〜3年後」の時間軸については、前回のお告げと今回の状態がどうつながっているかを明確にする。
 - 前回鑑定の手相・姓名判断・四柱推命・西洋占星術の読み取りを軽視せず、現在入力や近況メモだけで結論を作らない。
 - 一般的なビジネス助言、生活助言、自己啓発だけで終わらせず、鑑定上の根拠を自然に含める。
+- 現在の手相画像が添付されていない場合、「現在の手相から見える」「今回の手のひらでは」「今回の手相画像から読み取れる範囲では」など、現在の手相を読んだような表現は禁止。
+- 前回PDF内に記載された手相情報に触れる場合は、「前回鑑定に記された手相の傾向」と明示する。
+- 現在の手相画像が添付されている場合のみ、「今回の手相画像から読み取れる範囲では」と表現できる。
 - 前半では、前回と現在の差分・照合を優先する。
 - 抽象的な励ましを繰り返しすぎず、ユーザーが今後3カ月で意識できる具体的な小さな行動を入れる。
 - 「焦らず」「着実に」「長期的視点」「直感を信じる」などの表現を乱用しない。
@@ -578,6 +604,67 @@ def _parse_review_fortune_comparison_blocks(raw_value: Any) -> list[dict[str, st
         if any(block.values()):
             blocks.append(block)
     return blocks
+
+
+def _replace_current_palm_references_without_images(text: str) -> str:
+    result = str(text or '')
+    replacements = [
+        ('今回の手相画像から読み取れる範囲では', '今回の近況から見返すと'),
+        ('現在の手相画像から読み取れる範囲では', '現在の近況から見返すと'),
+        ('今回の手のひらでは', '今回の近況では'),
+        ('現在の手のひらでは', '現在の近況では'),
+        ('現在の手相と近況', '現在の近況'),
+        ('今回の手相画像', '今回の近況'),
+        ('現在の手相画像', '現在の近況'),
+        ('今回の手のひら', '今回の近況'),
+        ('現在の手のひら', '現在の近況'),
+        ('現在の手相から', '現在の近況から'),
+        ('今回の手相から', '今回の近況から'),
+        ('現在の手相では', '現在の近況では'),
+        ('今回の手相では', '今回の近況では'),
+        ('現在の手相に', '現在の近況に'),
+        ('今回の手相に', '今回の近況に'),
+        ('現在の手相を', '現在の近況を'),
+        ('今回の手相を', '今回の近況を'),
+    ]
+    for old, new in replacements:
+        result = result.replace(old, new)
+    return result
+
+
+def _sanitize_current_palm_references_without_images(review_fortune: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for field in REVIEW_FORTUNE_FIELDS:
+        sanitized[field] = _replace_current_palm_references_without_images(str(review_fortune.get(field) or ''))
+    for field in REVIEW_FORTUNE_LIST_FIELDS:
+        values = review_fortune.get(field)
+        if isinstance(values, list):
+            sanitized[field] = [_replace_current_palm_references_without_images(str(value)) for value in values]
+        else:
+            sanitized[field] = []
+
+    blocks: list[dict[str, str]] = []
+    for block in review_fortune.get('comparison_blocks') or []:
+        if not isinstance(block, dict):
+            continue
+        blocks.append(
+            {
+                field: _replace_current_palm_references_without_images(str(block.get(field) or ''))
+                for field in REVIEW_FORTUNE_COMPARISON_FIELDS
+            }
+        )
+    sanitized['comparison_blocks'] = blocks
+
+    current_changes = str(sanitized.get('current_changes') or '').strip()
+    no_image_note = (
+        '今回は現在の手相画像が添付されていないため、手相からの新たな読み取りは行わず、'
+        '前回鑑定に記された手相の傾向と、現在の近況メモを中心に見返してまいります。'
+    )
+    if current_changes and no_image_note not in current_changes:
+        sanitized['current_changes'] = f'{no_image_note}\n\n{current_changes}'
+    elif not current_changes:
+        sanitized['current_changes'] = no_image_note
+    return sanitized
 
 
 def normalize_review_reading_date(value: str, original_value: str = '') -> str:
@@ -1029,6 +1116,13 @@ def call_gemini_review_fortune(
 
     failed_step = 'parse_response'
     result = parse_review_fortune_result(response.text or '')
+    current_inputs = (review_context or {}).get('review_context', {}).get('current_inputs', {}) or {}
+    try:
+        palm_image_count = int(current_inputs.get('palm_image_count') or 0)
+    except (TypeError, ValueError):
+        palm_image_count = 0
+    if palm_image_count <= 0 and not image_parts and isinstance(result.get('review_fortune'), dict):
+        result['review_fortune'] = _sanitize_current_palm_references_without_images(result['review_fortune'])
     result['diagnostics'] = {
         **diagnostics_base,
         'failed_step': '' if result.get('fortune_success') else failed_step,
