@@ -110,6 +110,32 @@ REVIEW_FORTUNE_RESPONSE_JSON_SCHEMA = {
         'review_fortune': {
             'type': 'object',
             'properties': {
+                'review_summary_points': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                },
+                'comparison_blocks': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'theme': {'type': 'string'},
+                            'previous_message': {'type': 'string'},
+                            'current_status': {'type': 'string'},
+                            'reinterpretation': {'type': 'string'},
+                        },
+                        'required': [
+                            'theme',
+                            'previous_message',
+                            'current_status',
+                            'reinterpretation',
+                        ],
+                    },
+                },
+                'next_3_month_action_items': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                },
                 'intro': {'type': 'string'},
                 'continuing_flow': {'type': 'string'},
                 'current_changes': {'type': 'string'},
@@ -121,6 +147,9 @@ REVIEW_FORTUNE_RESPONSE_JSON_SCHEMA = {
                 'things_to_remember': {'type': 'string'},
             },
             'required': [
+                'review_summary_points',
+                'comparison_blocks',
+                'next_3_month_action_items',
                 'intro',
                 'continuing_flow',
                 'current_changes',
@@ -182,6 +211,18 @@ REVIEW_FORTUNE_FIELDS = [
     'ryujin_message',
     'miko_advice',
     'things_to_remember',
+]
+
+REVIEW_FORTUNE_LIST_FIELDS = [
+    'review_summary_points',
+    'next_3_month_action_items',
+]
+
+REVIEW_FORTUNE_COMPARISON_FIELDS = [
+    'theme',
+    'previous_message',
+    'current_status',
+    'reinterpretation',
 ]
 
 REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
@@ -350,9 +391,26 @@ current_private_inputs:
 
 現在の手相画像も添付されています。画像から読み取れる現在の状態や変化の手がかりを、前回PDF要約、時間軸再分類、相談テーマ、近況メモと重ねてください。
 
+見返し便の回答は、ユーザーの近況に合わせた一般的な助言ではなく、前回鑑定で用いた手相・姓名判断・四柱推命・西洋占星術の読み取りを前提に、今回の手相画像・近況・見返しテーマを照合して作成してください。
+見返しサマリー、比較ブロック、3カ月の行動提案も、必ず占術上の示唆や前回鑑定の時間軸とのつながりを踏まえてください。
+
 必ずJSONのみで返してください。章立ては以下のキーに対応させてください。
 {{
   "review_fortune": {{
+    "review_summary_points": [
+      "前回PDFの占術的な示唆・今回の近況・見返しテーマ・時間軸のつながりを短く整理した見返しポイント"
+    ],
+    "comparison_blocks": [
+      {{
+        "theme": "近況メモと見返しテーマに応じたテーマ名",
+        "previous_message": "前回のお告げで、手相・姓名判断・四柱推命・西洋占星術の読み取りから示されていたこと",
+        "current_status": "今回の近況・現在の手相画像・見返しテーマから見える現在の状態",
+        "reinterpretation": "前回鑑定の占術的示唆と時間軸を踏まえた今回の読み直し"
+      }}
+    ],
+    "next_3_month_action_items": [
+      "前回鑑定の時間軸と占術的示唆を踏まえて、これから3カ月で意識できる具体的な小さな行動"
+    ],
     "intro": "",
     "continuing_flow": "",
     "current_changes": "",
@@ -369,11 +427,24 @@ current_private_inputs:
 - 前回鑑定日、今回鑑定日、前回鑑定日からの経過日数・経過月数。
 - timeline_reinterpretation の status と note。
 - 前回PDF要約の内容。
+- 前回PDFから抽出された手相・姓名判断・四柱推命・西洋占星術の占術結果を、単なる背景情報ではなく、見返し鑑定の根拠として扱う。
 - 現在の手相画像から読み取れる今回時点の手がかり。
 - 今回とくに見返したいテーマ。
 - 近況メモに書かれた本人の現実感。
+- review_summary_points は4〜5項目程度。前回PDFを読み込んだからこそ分かる、前回のお告げ・占術上の示唆・現在の状況・テーマ・時間軸のつながりを短く分かりやすく書く。抽象的な励ましだけにしない。
+- comparison_blocks は原則3項目程度。テーマは近況メモと見返しテーマに応じて選び、「前回のお告げ」「現在の状況」「今回の読み直し」を必ず分ける。それぞれで、前回鑑定の占術的な示唆や今回の手相上の手がかりとの関係を踏まえる。当たった・外れたの判定はしない。
+- next_3_month_action_items は3〜5項目程度。重大判断ではなく、前回鑑定の時間軸・占術的示唆・今回テーマを踏まえた鑑定上の助言として、今後3カ月で意識できる具体的な小さな行動にする。命令口調にしない。
 
 重要な解釈方針:
+- 見返し便では、前回鑑定の単なる要約や言い換えに終わらせない。
+- 必ず「前回のお告げで占術上示されていたこと」「今回の近況・現在の手相から見える現在の状態」「それを踏まえた今回の読み直し」を分けて書く。
+- 特に「直近3カ月」「1年先」「2〜3年後」の時間軸については、前回のお告げと今回の状態がどうつながっているかを明確にする。
+- 前回鑑定の手相・姓名判断・四柱推命・西洋占星術の読み取りを軽視せず、現在入力や近況メモだけで結論を作らない。
+- 一般的なビジネス助言、生活助言、自己啓発だけで終わらせず、鑑定上の根拠を自然に含める。
+- 前半では、前回と現在の差分・照合を優先する。
+- 抽象的な励ましを繰り返しすぎず、ユーザーが今後3カ月で意識できる具体的な小さな行動を入れる。
+- 「焦らず」「着実に」「長期的視点」「直感を信じる」などの表現を乱用しない。
+- 励まし要素は、主に「龍神さまからの見返しの言葉」「巫女の助言」「心に留めること」に集約する。
 - 前回のお告げを「当たり」「外れ」と評価しない。
 - 「前回のお告げは当たっていました」「外れていました」「正しかった」「間違っていた」のような採点表現を使わない。
 - 前回のお告げと現在の近況が重なる点、前回時点とは違う流れになっている点、今も続いているテーマ、これからも意識したい流れとして整理する。
@@ -382,6 +453,7 @@ current_private_inputs:
 - 時期運は、前回鑑定日からの経過期間を踏まえて今回時点で再解釈する。
 - 手相は、現在の状態や変化を映す手がかりとして扱う。
 - 近況メモは、本人が実際に感じている現実として尊重する。
+- 医療・法律・投資・転職などの重大判断を促す表現は避ける。
 
 文体:
 - やさしく、静かで、少し神秘的に。
@@ -472,14 +544,40 @@ def _empty_review_fortune(
     reason: str,
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    review_fortune: dict[str, Any] = {field: '' for field in REVIEW_FORTUNE_FIELDS}
+    review_fortune.update({field: [] for field in REVIEW_FORTUNE_LIST_FIELDS})
+    review_fortune['comparison_blocks'] = []
     result = {
         'fortune_success': False,
-        'review_fortune': {field: '' for field in REVIEW_FORTUNE_FIELDS},
+        'review_fortune': review_fortune,
         'reason': reason,
     }
     if diagnostics:
         result['diagnostics'] = diagnostics
     return result
+
+
+def _parse_review_fortune_list(raw_value: Any) -> list[str]:
+    if not isinstance(raw_value, list):
+        return []
+    return [str(value).strip() for value in raw_value if str(value).strip()]
+
+
+def _parse_review_fortune_comparison_blocks(raw_value: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_value, list):
+        return []
+
+    blocks: list[dict[str, str]] = []
+    for raw_block in raw_value:
+        if not isinstance(raw_block, dict):
+            continue
+        block = {
+            field: str(raw_block.get(field) or '').strip()
+            for field in REVIEW_FORTUNE_COMPARISON_FIELDS
+        }
+        if any(block.values()):
+            blocks.append(block)
+    return blocks
 
 
 def normalize_review_reading_date(value: str, original_value: str = '') -> str:
@@ -627,8 +725,17 @@ def parse_review_fortune_result(raw_text: str) -> dict[str, Any]:
     if not isinstance(raw_fortune, dict):
         return _empty_review_fortune('Geminiの見返し便鑑定本文に review_fortune が含まれていません。')
 
-    review_fortune = {field: str(raw_fortune.get(field) or '').strip() for field in REVIEW_FORTUNE_FIELDS}
-    combined_text = '\n'.join(review_fortune.values())
+    review_fortune: dict[str, Any] = {field: str(raw_fortune.get(field) or '').strip() for field in REVIEW_FORTUNE_FIELDS}
+    for field in REVIEW_FORTUNE_LIST_FIELDS:
+        review_fortune[field] = _parse_review_fortune_list(raw_fortune.get(field))
+    review_fortune['comparison_blocks'] = _parse_review_fortune_comparison_blocks(raw_fortune.get('comparison_blocks'))
+
+    combined_text_parts = [str(review_fortune.get(field) or '') for field in REVIEW_FORTUNE_FIELDS]
+    for field in REVIEW_FORTUNE_LIST_FIELDS:
+        combined_text_parts.extend(review_fortune.get(field) or [])
+    for block in review_fortune.get('comparison_blocks') or []:
+        combined_text_parts.extend(str(block.get(field) or '') for field in REVIEW_FORTUNE_COMPARISON_FIELDS)
+    combined_text = '\n'.join(combined_text_parts)
     if any(phrase in combined_text for phrase in REVIEW_FORTUNE_FORBIDDEN_PHRASES):
         return _empty_review_fortune('見返し便鑑定本文に避けたい表現が含まれていました。')
 

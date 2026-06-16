@@ -26,6 +26,12 @@ REVIEW_FORTUNE_SECTION_TITLES = [
     ("巫女の助言", "miko_advice"),
     ("心に留めること", "things_to_remember"),
 ]
+REVIEW_FORTUNE_COMPARISON_FIELDS = [
+    "theme",
+    "previous_message",
+    "current_status",
+    "reinterpretation",
+]
 
 
 def register_japanese_font() -> str:
@@ -208,6 +214,58 @@ def build_review_pdf_sections(review_fortune: dict[str, Any]) -> list[tuple[str,
     ]
 
 
+def _clean_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _format_review_summary_points(review_fortune: dict[str, Any]) -> str:
+    points = _clean_string_list((review_fortune or {}).get("review_summary_points"))
+    if not points:
+        return ""
+    return "\n".join(f"・{point}" for point in points)
+
+
+def _format_next_3_month_action_items(review_fortune: dict[str, Any]) -> str:
+    items = _clean_string_list((review_fortune or {}).get("next_3_month_action_items"))
+    if not items:
+        return ""
+    intro = "これから3カ月は、以下のような小さな行動を意識するとよさそうです。"
+    return "\n".join([intro, "", *[f"・{item}" for item in items]])
+
+
+def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
+    raw_blocks = (review_fortune or {}).get("comparison_blocks")
+    if not isinstance(raw_blocks, list):
+        return ""
+
+    formatted_blocks: list[str] = []
+    for raw_block in raw_blocks:
+        if not isinstance(raw_block, dict):
+            continue
+        block = {
+            field: str(raw_block.get(field) or "").strip()
+            for field in REVIEW_FORTUNE_COMPARISON_FIELDS
+        }
+        if not any(block.values()):
+            continue
+        theme = block["theme"] or "見返しテーマ"
+        parts = [
+            f"■ {theme}",
+            "前回のお告げ：",
+            block["previous_message"],
+            "",
+            "現在の状況：",
+            block["current_status"],
+            "",
+            "今回の読み直し：",
+            block["reinterpretation"],
+        ]
+        formatted_blocks.append("\n".join(part for part in parts if part != ""))
+    return "\n\n".join(formatted_blocks)
+
+
 def _format_iso_date_japanese(value: str) -> str:
     try:
         parsed = datetime.datetime.strptime(str(value or ""), "%Y-%m-%d").date()
@@ -226,7 +284,15 @@ def generate_review_fortune_pdf(
     previous_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("previous_reading_date", ""))
     current_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("current_reading_date", ""))
     selected_theme = str(current_inputs.get("selected_theme") or "未選択")
-    sections = build_review_pdf_sections(review_fortune)
+    base_sections = build_review_pdf_sections(review_fortune)
+    sections = [
+        ("今回の見返しポイント", _format_review_summary_points(review_fortune)),
+        base_sections[0],
+        ("前回のお告げと現在の照らし合わせ", _format_comparison_blocks(review_fortune)),
+        *base_sections[1:4],
+        ("これから3カ月の小さな行動", _format_next_3_month_action_items(review_fortune)),
+        *base_sections[4:],
+    ]
 
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
