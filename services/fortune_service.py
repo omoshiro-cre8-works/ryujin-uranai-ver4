@@ -147,9 +147,6 @@ REVIEW_FORTUNE_RESPONSE_JSON_SCHEMA = {
                 'things_to_remember': {'type': 'string'},
             },
             'required': [
-                'review_summary_points',
-                'comparison_blocks',
-                'next_3_month_action_items',
                 'intro',
                 'continuing_flow',
                 'current_changes',
@@ -227,7 +224,8 @@ REVIEW_FORTUNE_COMPARISON_FIELDS = [
 
 REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
     '絶対に',
-    '必ず',
+    '必ず成功',
+    '必ず当たる',
     '運命です',
     '悪いことが起きます',
     '前回は当たっていました',
@@ -237,6 +235,11 @@ REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
     '前回の鑑定は正しかったです',
     '前回の鑑定は間違っていました',
     'あなたはこうするべきです',
+    'すべきです',
+    '投資すべき',
+    '転職すべき',
+    '治ります',
+    '診断します',
 ]
 
 
@@ -823,13 +826,30 @@ def parse_review_fortune_result(raw_text: str) -> dict[str, Any]:
     for block in review_fortune.get('comparison_blocks') or []:
         combined_text_parts.extend(str(block.get(field) or '') for field in REVIEW_FORTUNE_COMPARISON_FIELDS)
     combined_text = '\n'.join(combined_text_parts)
-    if any(phrase in combined_text for phrase in REVIEW_FORTUNE_FORBIDDEN_PHRASES):
-        return _empty_review_fortune('見返し便鑑定本文に避けたい表現が含まれていました。')
+    forbidden_phrase_detected = any(phrase in combined_text for phrase in REVIEW_FORTUNE_FORBIDDEN_PHRASES)
+    missing_sections = [field for field in REVIEW_FORTUNE_FIELDS if not review_fortune[field]]
+    if forbidden_phrase_detected:
+        return _empty_review_fortune(
+            '見返し便鑑定本文に避けたい表現が含まれていました。',
+            {
+                'failed_step': 'parse_response',
+                'error_type': 'ForbiddenPhrase',
+                'missing_sections_count': len(missing_sections),
+                'forbidden_phrase_detected': True,
+            },
+        )
 
+    fortune_success = not missing_sections
     return {
-        'fortune_success': all(bool(review_fortune[field]) for field in REVIEW_FORTUNE_FIELDS),
+        'fortune_success': fortune_success,
         'review_fortune': review_fortune,
-        'reason': '見返し便鑑定本文を整理しました。',
+        'reason': '見返し便鑑定本文を整理しました。' if fortune_success else '見返し便鑑定本文の必須章に空欄がありました。',
+        'diagnostics': {
+            'failed_step': '' if fortune_success else 'parse_response',
+            'error_type': '',
+            'missing_sections_count': len(missing_sections),
+            'forbidden_phrase_detected': False,
+        },
     }
 
 
@@ -1101,13 +1121,10 @@ def call_gemini_review_fortune(
             'failed_step': failed_step,
         }
         logger.warning(
-            'review_fortune_failed',
-            extra={
-                'error_type': diagnostics['error_type'],
-                'failed_step': failed_step,
-                'model_name': GEMINI_MODEL,
-                'image_count': len(image_parts),
-            },
+            'review_fortune_failed '
+            f"fortune_success=False failed_step={failed_step} "
+            f"error_type={diagnostics['error_type']} reason=gemini_exception "
+            f"missing_sections_count=0 forbidden_phrase_detected=False image_count={len(image_parts)}"
         )
         return _empty_review_fortune(
             '見返し便の鑑定本文生成中にエラーが発生しました。時間をおいてもう一度お試しください。',
@@ -1116,6 +1133,7 @@ def call_gemini_review_fortune(
 
     failed_step = 'parse_response'
     result = parse_review_fortune_result(response.text or '')
+    parse_diagnostics = result.get('diagnostics') or {}
     current_inputs = (review_context or {}).get('review_context', {}).get('current_inputs', {}) or {}
     try:
         palm_image_count = int(current_inputs.get('palm_image_count') or 0)
@@ -1123,19 +1141,27 @@ def call_gemini_review_fortune(
         palm_image_count = 0
     if palm_image_count <= 0 and not image_parts and isinstance(result.get('review_fortune'), dict):
         result['review_fortune'] = _sanitize_current_palm_references_without_images(result['review_fortune'])
+    result_failed_step = str(parse_diagnostics.get('failed_step') or ('' if result.get('fortune_success') else failed_step))
+    result_error_type = str(parse_diagnostics.get('error_type') or '')
+    missing_sections_count = int(parse_diagnostics.get('missing_sections_count') or 0)
+    forbidden_phrase_detected = bool(parse_diagnostics.get('forbidden_phrase_detected'))
     result['diagnostics'] = {
         **diagnostics_base,
-        'failed_step': '' if result.get('fortune_success') else failed_step,
-        'error_type': '',
+        'failed_step': result_failed_step,
+        'error_type': result_error_type,
         'error_message_short': '',
+        'missing_sections_count': missing_sections_count,
+        'forbidden_phrase_detected': forbidden_phrase_detected,
     }
+    safe_reason = re.sub(r'[^0-9A-Za-z_\-ぁ-んァ-ヶ一-龠々ー。・、 ]+', '', str(result.get('reason') or ''))
+    if len(safe_reason) > 80:
+        safe_reason = safe_reason[:80]
     logger.info(
-        'review_fortune_completed',
-        extra={
-            'review_fortune_success': bool(result.get('fortune_success')),
-            'model_name': GEMINI_MODEL,
-            'image_count': len(image_parts),
-        },
+        'review_fortune_completed '
+        f"fortune_success={bool(result.get('fortune_success'))} "
+        f"failed_step={result_failed_step} error_type={result_error_type} "
+        f"reason={safe_reason} missing_sections_count={missing_sections_count} "
+        f"forbidden_phrase_detected={forbidden_phrase_detected} image_count={len(image_parts)}"
     )
     return result
 
