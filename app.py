@@ -694,7 +694,7 @@ def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
             <div style="font-weight:700; margin-top:0.55rem;">商品種別：{product_name}</div>
             <div style="margin-top:0.55rem;">所要時間は3〜5分ほどです。</div>
             <div>{price_note}</div>
-            <div>決済完了後、この画面に戻ると入力フォームが表示されます。</div>
+            <div>決済完了後、こちらのページに戻ると入力フォームが表示されます。</div>
             {review_note}
         </div>
         ''',
@@ -707,7 +707,7 @@ def render_usage_flow(active_amount_jpy: int) -> None:
     st.markdown(
         f'''
 1. {active_amount_jpy}円の決済ページへ進む
-2. 決済完了後、このページに戻る
+2. 決済完了後、こちらのページに戻る
 3. 入力フォームに記入する
 4. お告げPDFを受け取る
 '''
@@ -756,15 +756,24 @@ def render_pdf_contents_summary() -> None:
     )
 
 
-def render_checkout_reassurance(active_amount_jpy: int) -> None:
+def render_checkout_reassurance(product_type: str, active_amount_jpy: int) -> None:
+    form_label = "見返し便フォーム" if product_type == PRODUCT_TYPE_REVIEW else "鑑定フォーム"
+    review_prepare_note = (
+        '<div style="margin-bottom:0.25rem;">・見返し便では、前回の鑑定PDFと現在の手相画像をご用意ください。</div>'
+        if product_type == PRODUCT_TYPE_REVIEW
+        else ""
+    )
     st.markdown(
         f'''
-        <div style="border:1px solid #eadfd8; background:#fffdf9; border-radius:14px; padding:14px 16px; margin:0.45rem 0 0.7rem 0; color:#3b312d; line-height:1.8;">
-            <div>お支払いは1回{active_amount_jpy}円（税込）です。</div>
-            <div>月額課金や継続課金ではありません。</div>
-            <div style="margin-top:0.55rem;">決済はStripeの決済ページで行われます。</div>
-            <div>このページでは、クレジットカード番号を保存しません。</div>
-            <div style="margin-top:0.55rem;">決済完了後、このページに戻ると鑑定フォームが表示されます。</div>
+        <div style="border:1px solid #e5d7d1; background:#fffdfa; border-radius:14px; padding:14px 16px; margin:0.3rem 0 0.7rem 0; color:#3b312d; line-height:1.8;">
+            <div style="font-weight:700; margin-bottom:0.45rem;">有料版のご利用について</div>
+            <div style="margin-bottom:0.25rem;">・本サービスは1回{active_amount_jpy}円（税込）の単発課金です。</div>
+            <div style="margin-bottom:0.25rem;">・月額課金や継続課金ではありません。</div>
+            <div style="margin-bottom:0.25rem;">・決済はStripeの安全な決済ページで行われます。</div>
+            <div style="margin-bottom:0.25rem;">・こちらのページでは、クレジットカード番号を保存しません。</div>
+            <div style="margin-bottom:0.25rem;">・決済完了後、こちらのページに戻ると{form_label}が表示されます。</div>
+            {review_prepare_note}
+            <div>・1回の購入につき、鑑定の実行は1回のみです。</div>
         </div>
         ''',
         unsafe_allow_html=True,
@@ -780,17 +789,6 @@ def render_payment_section(product_type: str, logger: logging.Logger) -> dict[st
     render_pdf_contents_summary()
 
     st.markdown('<div class="heading-lg">💳 ご利用手続き</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'''
-        <div style="border:1px solid #e5d7d1; background:#fffdfa; border-radius:14px; padding:14px 16px; margin:0.3rem 0 1rem 0; color:#3b312d;">
-            <div style="font-weight:700; margin-bottom:0.45rem;">有料版のご利用について</div>
-            <div style="margin-bottom:0.25rem;">・本サービスは <strong>1回 {active_amount_jpy}円</strong> の単発課金です。</div>
-            <div style="margin-bottom:0.25rem;">・決済完了後、この画面に戻ると鑑定フォームが表示されます。</div>
-            <div>・1回の購入につき、鑑定の実行は1回のみです。</div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
 
     if not STRIPE_ENABLED:
         st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
@@ -825,7 +823,7 @@ def render_payment_section(product_type: str, logger: logging.Logger) -> dict[st
             return None
 
     if checkout_url:
-        render_checkout_reassurance(active_amount_jpy)
+        render_checkout_reassurance(product_type, active_amount_jpy)
         render_checkout_link(checkout_url, active_amount_jpy)
 
     return None
@@ -1659,7 +1657,7 @@ def main() -> None:
         else:
             render_fortune_form(active_purchase, logger)
     else:
-        st.info("決済が完了すると、このページに戻り、鑑定フォームが表示されます。")
+        st.info("決済が完了すると、こちらのページに戻り、鑑定フォームが表示されます。")
         st.divider()
         return
 
