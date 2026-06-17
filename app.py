@@ -758,22 +758,24 @@ def render_pdf_contents_summary() -> None:
 
 def render_checkout_reassurance(product_type: str, active_amount_jpy: int) -> None:
     form_label = "見返し便フォーム" if product_type == PRODUCT_TYPE_REVIEW else "鑑定フォーム"
-    review_prepare_note = (
-        '<div style="margin-bottom:0.25rem;">・見返し便では、前回の鑑定PDFと現在の手相画像をご用意ください。</div>'
-        if product_type == PRODUCT_TYPE_REVIEW
-        else ""
-    )
+    usage_notes = [
+        f'<div style="margin-bottom:0.25rem;">・本サービスは1回{active_amount_jpy}円（税込）の単発課金です。</div>',
+        '<div style="margin-bottom:0.25rem;">・月額課金や継続課金ではありません。</div>',
+        '<div style="margin-bottom:0.25rem;">・決済はStripeの安全な決済ページで行われます。</div>',
+        '<div style="margin-bottom:0.25rem;">・こちらのページでは、クレジットカード番号を保存しません。</div>',
+        f'<div style="margin-bottom:0.25rem;">・決済完了後、こちらのページに戻ると{form_label}が表示されます。</div>',
+    ]
+    if product_type == PRODUCT_TYPE_REVIEW:
+        usage_notes.append(
+            '<div style="margin-bottom:0.25rem;">・見返し便では、前回の鑑定PDFと現在の手相画像をご用意ください。</div>'
+        )
+    usage_notes.append('<div>・1回の購入につき、鑑定の実行は1回のみです。</div>')
+    usage_notes_html = "\n".join(usage_notes)
     st.markdown(
         f'''
         <div style="border:1px solid #e5d7d1; background:#fffdfa; border-radius:14px; padding:14px 16px; margin:0.3rem 0 0.7rem 0; color:#3b312d; line-height:1.8;">
             <div style="font-weight:700; margin-bottom:0.45rem;">有料版のご利用について</div>
-            <div style="margin-bottom:0.25rem;">・本サービスは1回{active_amount_jpy}円（税込）の単発課金です。</div>
-            <div style="margin-bottom:0.25rem;">・月額課金や継続課金ではありません。</div>
-            <div style="margin-bottom:0.25rem;">・決済はStripeの安全な決済ページで行われます。</div>
-            <div style="margin-bottom:0.25rem;">・こちらのページでは、クレジットカード番号を保存しません。</div>
-            <div style="margin-bottom:0.25rem;">・決済完了後、こちらのページに戻ると{form_label}が表示されます。</div>
-            {review_prepare_note}
-            <div>・1回の購入につき、鑑定の実行は1回のみです。</div>
+            {usage_notes_html}
         </div>
         ''',
         unsafe_allow_html=True,
