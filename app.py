@@ -538,58 +538,37 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
     if not session:
         return None
 
-    purchase_id = None
     metadata = getattr(session, "metadata", None) or {}
-    if isinstance(metadata, dict):
-        purchase_id = metadata.get("purchase_id")
-    if not purchase_id:
-        purchase_id = getattr(session, "client_reference_id", None)
+    metadata_purchase_id = metadata.get("purchase_id") if hasattr(metadata, "get") else None
+    client_reference_id = getattr(session, "client_reference_id", None)
+    purchase_id = metadata_purchase_id or client_reference_id
 
     if not purchase_id:
         return None
 
-    payment_status = getattr(session, "payment_status", None)
-    status = getattr(session, "status", None)
+    if metadata_purchase_id and client_reference_id and metadata_purchase_id != client_reference_id:
+        logger.warning("checkout_session_purchase_id_mismatch")
+        return None
 
-    if payment_status != "paid" and status != "complete":
-        return get_purchase_record(purchase_id)
+    record = get_purchase_record(purchase_id)
+    if not record:
+        return None
 
-    amount_total = getattr(session, "amount_total", None)
-    currency = getattr(session, "currency", None)
-    metadata = getattr(session, "metadata", None) or {}
+    stored_session_id = record.get("stripe_checkout_session_id")
+    retrieved_session_id = getattr(session, "id", None)
+    if not stored_session_id or stored_session_id != retrieved_session_id:
+        logger.warning(
+            "checkout_session_record_mismatch",
+            extra={"purchase_id": purchase_id},
+        )
+        return None
 
-    amount_jpy = amount_total if currency == "jpy" and isinstance(amount_total, int) else None
-    price_id = metadata.get("price_id") if isinstance(metadata, dict) else None
-    existing_record = get_purchase_record(purchase_id) or {}
-    product_type = normalize_product_type(
-        (metadata.get("product_type") if isinstance(metadata, dict) else None)
-        or existing_record.get("product_type")
-    )
-    price_type = (
-        (metadata.get("price_type") if isinstance(metadata, dict) else None)
-        or existing_record.get("price_type")
-    )
-
-    record = update_purchase_record(
-        purchase_id,
-        payment_status="paid",
-        stripe_checkout_session_id=getattr(session, "id", None),
-        product_type=product_type,
-        price_type=price_type or get_checkout_price_type(product_type, price_id or ""),
-        price_id=price_id,
-        amount_jpy=amount_jpy,
-        amount_total=amount_total,
-        currency=currency,
-        checkout_completed_at=utc_now(),
-    )
-    if record:
-        st.session_state.active_purchase_id = purchase_id
+    if record.get("payment_status") != "paid":
         logger.info(
-            "checkout_session_paid_synced",
+            "checkout_session_waiting_for_webhook",
             extra={
-                "env": APP_ENV,
                 "purchase_id": purchase_id,
-                "stripe_checkout_session_id": getattr(session, "id", None),
+                "payment_status": getattr(session, "payment_status", None),
             },
         )
     return record

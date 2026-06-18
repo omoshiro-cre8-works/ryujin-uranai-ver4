@@ -66,7 +66,13 @@ def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] |
 
 def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | None) -> bool:
     metadata = session.get("metadata") or {}
-    purchase_id = metadata.get("purchase_id") or session.get("client_reference_id")
+    metadata_purchase_id = metadata.get("purchase_id")
+    client_reference_id = session.get("client_reference_id")
+    if metadata_purchase_id and client_reference_id and metadata_purchase_id != client_reference_id:
+        logger.warning("purchase_id_mismatch_in_session")
+        return False
+
+    purchase_id = metadata_purchase_id or client_reference_id
     if not purchase_id:
         logger.warning("purchase_id_not_found_in_session")
         return False
@@ -74,6 +80,18 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
     record = get_purchase_record(purchase_id)
     if not record:
         logger.warning("purchase_record_not_found", extra={"purchase_id": purchase_id})
+        return False
+
+    payment_status = session.get("payment_status")
+    if payment_status != "paid":
+        logger.info(
+            "session_not_paid_yet",
+            extra={
+                "purchase_id": purchase_id,
+                "payment_status": payment_status,
+                "status": session.get("status"),
+            },
+        )
         return False
 
     existing_event_id = record.get("stripe_event_id")
@@ -84,36 +102,48 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
         )
         return True
 
-    payment_status = session.get("payment_status")
-    status = session.get("status")
-
-    if payment_status != "paid" and status != "complete":
-        logger.info(
-            "session_not_paid_yet",
-            extra={
-                "purchase_id": purchase_id,
-                "payment_status": payment_status,
-                "status": status,
-            },
-        )
+    session_id = session.get("id")
+    if not session_id or record.get("stripe_checkout_session_id") != session_id:
+        logger.warning("stripe_checkout_session_id_mismatch", extra={"purchase_id": purchase_id})
         return False
 
     amount_total = session.get("amount_total")
     currency = session.get("currency")
-    amount_jpy = amount_total if currency == "jpy" and isinstance(amount_total, int) else None
-    product_type = normalize_product_type(
-        metadata.get("product_type") or str(record.get("product_type") or "")
-    )
+    if not isinstance(amount_total, int) or amount_total != record.get("amount_jpy"):
+        logger.warning("stripe_amount_mismatch", extra={"purchase_id": purchase_id})
+        return False
+    if not currency or currency != record.get("currency"):
+        logger.warning("stripe_currency_mismatch", extra={"purchase_id": purchase_id})
+        return False
+
+    metadata_price_id = metadata.get("price_id")
+    if not metadata_price_id or metadata_price_id != record.get("price_id"):
+        logger.warning("stripe_price_id_mismatch", extra={"purchase_id": purchase_id})
+        return False
+
+    metadata_product_type = metadata.get("product_type")
+    if (
+        not metadata_product_type
+        or normalize_product_type(metadata_product_type)
+        != normalize_product_type(str(record.get("product_type") or ""))
+    ):
+        logger.warning("stripe_product_type_mismatch", extra={"purchase_id": purchase_id})
+        return False
+
+    metadata_price_type = metadata.get("price_type")
+    if not metadata_price_type or metadata_price_type != record.get("price_type"):
+        logger.warning("stripe_price_type_mismatch", extra={"purchase_id": purchase_id})
+        return False
 
     update_purchase_record(
         purchase_id,
         payment_status="paid",
-        stripe_checkout_session_id=session.get("id"),
+        stripe_checkout_session_id=session_id,
         stripe_event_id=event_id,
-        product_type=product_type,
-        price_type=metadata.get("price_type") or record.get("price_type"),
-        price_id=metadata.get("price_id"),
-        amount_jpy=amount_jpy,
+        product_type=normalize_product_type(metadata_product_type),
+        price_type=metadata_price_type,
+        price_id=metadata_price_id,
+        amount_jpy=amount_total,
         amount_total=amount_total,
         currency=currency,
         checkout_completed_at=utc_now(),
@@ -124,7 +154,7 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
         "purchase_marked_paid_by_webhook",
         extra={
             "purchase_id": purchase_id,
-            "stripe_checkout_session_id": session.get("id"),
+            "stripe_checkout_session_id": session_id,
             "stripe_event_id": event_id,
         },
     )
