@@ -387,7 +387,9 @@ def create_purchase_record(
         checkout_completed_at=None,
         app_version=APP_ENV,
     )
-    return record or {}
+    record = record or {}
+    record["_access_token"] = access_token
+    return record
 
 
 def get_purchase_record(purchase_id: str | None) -> dict[str, Any] | None:
@@ -477,7 +479,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
             ],
             success_url=build_checkout_success_url(
                 purchase_id=purchase_id,
-                access_token=str(record.get("access_token") or ""),
+                access_token=str(record.get("_access_token") or ""),
                 product_type=product_type,
             ),
             cancel_url=WIX_CANCEL_URL,

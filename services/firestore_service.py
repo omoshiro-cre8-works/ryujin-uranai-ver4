@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -24,6 +26,11 @@ def get_firestore_client() -> firestore.Client:
     return firestore.Client()
 
 
+def hash_access_token(access_token: str) -> str:
+    """access token の SHA-256 hash を返す。"""
+    return hashlib.sha256(access_token.encode("utf-8")).hexdigest()
+
+
 def create_purchase_record(
     purchase_id: str,
     stripe_checkout_session_id: str,
@@ -42,7 +49,7 @@ def create_purchase_record(
     Args:
         purchase_id: アプリ側で管理する購入ID
         stripe_checkout_session_id: Stripe Checkout Session ID
-        access_token: 決済後アクセス用トークン
+        access_token: 決済後アクセス用トークン（Firestore には hash のみ保存）
         token_expires_at: トークン有効期限（UTC datetime）
         product_type: 商品種別（regular / review）
         price_type: 価格種別（regular_campaign / review_regular など）
@@ -66,7 +73,7 @@ def create_purchase_record(
         "payment_status": "pending",
         "used_flag": False,
         "used_at": None,
-        "access_token": access_token,
+        "access_token_hash": hash_access_token(access_token),
         "token_expires_at": token_expires_at,
         "product_type": product_type if product_type in {"regular", "review"} else "regular",
         "price_type": price_type,
@@ -100,20 +107,39 @@ def get_purchase_by_id(purchase_id: str) -> Optional[Dict[str, Any]]:
 def get_purchase_by_access_token(access_token: str) -> Optional[Dict[str, Any]]:
     """
     access_token で購入レコードを1件取得する。
+
+    新形式の access_token_hash を優先し、既存レコードとの後方互換のため
+    旧 access_token フィールドも照合する。
     """
     db = get_firestore_client()
+    access_token_hash = hash_access_token(access_token)
 
-    query = (
+    hash_query = (
+        db.collection(COLLECTION_NAME)
+        .where("access_token_hash", "==", access_token_hash)
+        .limit(1)
+    )
+    hash_docs = list(hash_query.stream())
+    if hash_docs:
+        data = hash_docs[0].to_dict() or {}
+        stored_hash = data.get("access_token_hash")
+        if isinstance(stored_hash, str) and hmac.compare_digest(stored_hash, access_token_hash):
+            return data
+
+    legacy_query = (
         db.collection(COLLECTION_NAME)
         .where("access_token", "==", access_token)
         .limit(1)
     )
+    legacy_docs = list(legacy_query.stream())
+    if legacy_docs:
+        data = legacy_docs[0].to_dict() or {}
+        stored_token = data.get("access_token")
+        if isinstance(stored_token, str) and hmac.compare_digest(stored_token, access_token):
+            data.pop("access_token", None)
+            return data
 
-    docs = list(query.stream())
-    if not docs:
-        return None
-
-    return docs[0].to_dict()
+    return None
 
 
 def mark_purchase_paid(
