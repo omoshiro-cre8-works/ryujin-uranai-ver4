@@ -142,6 +142,72 @@ def get_purchase_by_access_token(access_token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _access_token_matches(purchase: Dict[str, Any], access_token: str) -> bool:
+    if not access_token:
+        return False
+
+    stored_hash = purchase.get("access_token_hash")
+    if isinstance(stored_hash, str):
+        return hmac.compare_digest(stored_hash, hash_access_token(access_token))
+
+    stored_token = purchase.get("access_token")
+    return isinstance(stored_token, str) and hmac.compare_digest(stored_token, access_token)
+
+
+def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
+    """
+    transaction 内で購入情報を再確認し、利用可能な場合だけ使用済みにする。
+    """
+    if not purchase_id or not access_token:
+        return False
+
+    db = get_firestore_client()
+    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def consume(transaction: Any) -> bool:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return False
+
+        purchase = snapshot.to_dict() or {}
+        if purchase.get("payment_status") != "paid":
+            return False
+        if purchase.get("used_flag") is not False:
+            return False
+        if not _access_token_matches(purchase, access_token):
+            return False
+
+        expires_at = purchase.get("token_expires_at")
+        if not expires_at:
+            return False
+        if getattr(expires_at, "tzinfo", None) is None:
+            try:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                return False
+
+        now = _now_utc()
+        try:
+            if expires_at <= now:
+                return False
+        except TypeError:
+            return False
+
+        transaction.update(
+            doc_ref,
+            {
+                "used_flag": True,
+                "used_at": now,
+                "updated_at": now,
+            },
+        )
+        return True
+
+    return consume(transaction)
+
+
 def mark_purchase_paid(
     purchase_id: str,
     stripe_event_id: Optional[str] = None,

@@ -14,11 +14,34 @@ class FakeSnapshot:
 
 
 class FakeDocument:
-    def __init__(self):
+    def __init__(self, record=None):
         self.payload = None
+        self.record = record
+        self.read_transaction = None
 
     def set(self, payload):
         self.payload = dict(payload)
+
+    def get(self, transaction=None):
+        self.read_transaction = transaction
+        return FakeTransactionSnapshot(self.record)
+
+
+class FakeTransactionSnapshot(FakeSnapshot):
+    @property
+    def exists(self):
+        return self._data is not None
+
+    def to_dict(self):
+        return dict(self._data or {})
+
+
+class FakeTransaction:
+    def __init__(self):
+        self.updates = []
+
+    def update(self, doc_ref, updates):
+        self.updates.append((doc_ref, dict(updates)))
 
 
 class FakeQuery:
@@ -49,7 +72,8 @@ class FakeQuery:
 class FakeCollection:
     def __init__(self, records=None):
         self.records = records or []
-        self.document_ref = FakeDocument()
+        record = self.records[0] if self.records else None
+        self.document_ref = FakeDocument(record)
 
     def document(self, purchase_id):
         return self.document_ref
@@ -61,10 +85,14 @@ class FakeCollection:
 class FakeFirestoreClient:
     def __init__(self, records=None):
         self.collection_ref = FakeCollection(records)
+        self.transaction_ref = FakeTransaction()
 
     def collection(self, name):
         assert name == firestore_service.COLLECTION_NAME
         return self.collection_ref
+
+    def transaction(self):
+        return self.transaction_ref
 
 
 def test_create_purchase_record_saves_hash_without_plaintext_token(monkeypatch):
@@ -129,6 +157,81 @@ def test_get_purchase_by_access_token_supports_legacy_plaintext_record(monkeypat
     result = firestore_service.get_purchase_by_access_token(token)
     assert result["purchase_id"] == "p_legacy"
     assert "access_token" not in result
+
+
+def _consume_record(**updates):
+    token = "transaction-token"
+    record = {
+        "purchase_id": "p_transaction",
+        "payment_status": "paid",
+        "used_flag": False,
+        "token_expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "access_token_hash": firestore_service.hash_access_token(token),
+    }
+    record.update(updates)
+    return token, record
+
+
+def _run_consume(monkeypatch, record, token):
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+    consumed = firestore_service.consume_purchase_transaction("p_transaction", token)
+    return consumed, client
+
+
+def test_consume_purchase_transaction_updates_valid_hash_record(monkeypatch):
+    token, record = _consume_record()
+
+    consumed, client = _run_consume(monkeypatch, record, token)
+
+    assert consumed is True
+    assert client.collection_ref.document_ref.read_transaction is client.transaction_ref
+    assert len(client.transaction_ref.updates) == 1
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["used_flag"] is True
+    assert updates["used_at"] == updates["updated_at"]
+
+
+@pytest.mark.parametrize(
+    "record_updates",
+    [
+        {"used_flag": True},
+        {"used_flag": None},
+        {"payment_status": "pending"},
+        {"token_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+    ],
+)
+def test_consume_purchase_transaction_does_not_update_invalid_record(
+    monkeypatch,
+    record_updates,
+):
+    token, record = _consume_record(**record_updates)
+
+    consumed, client = _run_consume(monkeypatch, record, token)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_purchase_transaction_rejects_wrong_token(monkeypatch):
+    _, record = _consume_record()
+
+    consumed, client = _run_consume(monkeypatch, record, "wrong-token")
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_purchase_transaction_supports_legacy_token(monkeypatch):
+    token, record = _consume_record()
+    record.pop("access_token_hash")
+    record["access_token"] = token
+
+    consumed, client = _run_consume(monkeypatch, record, token)
+
+    assert consumed is True
+    assert len(client.transaction_ref.updates) == 1
 
 
 @pytest.mark.parametrize(

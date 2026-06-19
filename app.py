@@ -40,6 +40,7 @@ from config import (
 )
 from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
+    consume_purchase_transaction,
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
     get_purchase_by_access_token,
@@ -137,6 +138,8 @@ def init_session_state() -> None:
         st.session_state.user_name = ""
     if "active_purchase_id" not in st.session_state:
         st.session_state.active_purchase_id = None
+    if "active_access_token" not in st.session_state:
+        st.session_state.active_access_token = None
     if "checkout_url" not in st.session_state:
         st.session_state.checkout_url = None
     if "checkout_product_type" not in st.session_state:
@@ -161,8 +164,6 @@ def init_session_state() -> None:
         st.session_state.review_pdf_generated_purchase_id = None
     if "review_purchase_consumed" not in st.session_state:
         st.session_state.review_purchase_consumed = set()
-    if "review_purchase_consume_failed" not in st.session_state:
-        st.session_state.review_purchase_consume_failed = set()
 
 
 def get_query_param_value(key: str) -> str | None:
@@ -497,6 +498,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
             stripe_checkout_session_id=session.id,
         )
         st.session_state.active_purchase_id = purchase_id
+        st.session_state.active_access_token = record.get("_access_token")
         st.session_state.checkout_url = session.url
         st.session_state.checkout_product_type = product_type
         logger.info(
@@ -576,15 +578,20 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
     return record
 
 
-def consume_purchase(purchase_id: str, logger: logging.Logger) -> None:
-    record = get_purchase_record(purchase_id)
-    if not is_purchase_ready(record):
-        return
-    update_purchase_record(
-        purchase_id,
-        used_flag=True,
-        used_at=utc_now(),
-    )
+def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
+    try:
+        consumed = consume_purchase_transaction(
+            purchase_id,
+            str(st.session_state.get("active_access_token") or ""),
+        )
+    except Exception:
+        logger.exception(
+            "purchase_consume_failed",
+            extra={"purchase_id": purchase_id},
+        )
+        return False
+    if not consumed:
+        return False
     logger.info(
         "purchase_consumed",
         extra={
@@ -592,6 +599,7 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> None:
             "purchase_id": purchase_id,
         },
     )
+    return True
 
 
 def get_current_purchase_record() -> dict[str, Any] | None:
@@ -602,6 +610,13 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     if session_id:
         synced_record = sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
         if synced_record:
+            if access_token:
+                token_record = get_purchase_by_access_token(access_token)
+                if (
+                    token_record
+                    and token_record.get("purchase_id") == synced_record.get("purchase_id")
+                ):
+                    st.session_state.active_access_token = access_token
             should_clean_purchase_query = bool(access_token or purchase_id or get_query_param_value("product_type"))
             if should_clean_purchase_query:
                 st.session_state.active_purchase_id = synced_record.get("purchase_id")
@@ -611,6 +626,7 @@ def get_current_purchase_record() -> dict[str, Any] | None:
         token_record = get_purchase_by_access_token(access_token)
         if token_record and (not purchase_id or str(token_record.get("purchase_id") or "") == purchase_id):
             st.session_state.active_purchase_id = token_record.get("purchase_id")
+            st.session_state.active_access_token = access_token
             clean_purchase_query_params()
             return token_record
     active_purchase_id = st.session_state.get("active_purchase_id")
@@ -1034,9 +1050,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         st.session_state.review_fortune_purchase_id = None
         st.session_state.review_pdf_bytes = None
         st.session_state.review_pdf_generated_purchase_id = None
-        if active_purchase.get("purchase_id"):
-            st.session_state.review_purchase_consume_failed.discard(active_purchase.get("purchase_id"))
-
         record = get_purchase_record(active_purchase.get("purchase_id"))
         if get_purchase_product_type(record) != PRODUCT_TYPE_REVIEW:
             st.error("見返し便の購入情報を確認できませんでした。ページを再読み込みして状態をご確認ください。")
@@ -1077,6 +1090,20 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 st.error("前回お届けした「龍神さまのお告げ」の鑑定PDFかどうかをご確認のうえ、再アップロードしてください。")
                 return
 
+            try:
+                image_parts = build_image_parts(uploaded_files or [])
+            except Exception as exc:
+                st.error("現在の手相画像の読み込み中にエラーが発生しました。")
+                if SHOW_DEBUG:
+                    st.caption(f"error_type={type(exc).__name__} / failed_step=build_image_parts")
+                return
+
+            purchase_id = str(active_purchase.get("purchase_id") or "")
+            if not consume_purchase(purchase_id, logger):
+                st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+                return
+            st.session_state.review_purchase_consumed.add(purchase_id)
+
             with st.spinner("前回のお告げを要約し、時間の流れを整理しています..."):
                 pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
 
@@ -1105,14 +1132,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 },
             )
             st.session_state.review_context = review_context
-
-            try:
-                image_parts = build_image_parts(uploaded_files or [])
-            except Exception as exc:
-                st.error("現在の手相画像の読み込み中にエラーが発生しました。")
-                if SHOW_DEBUG:
-                    st.caption(f"error_type={type(exc).__name__} / failed_step=build_image_parts")
-                return
 
             with st.spinner("見返し便の鑑定本文を生成しています..."):
                 palm_image_count = len(uploaded_files or [])
@@ -1290,33 +1309,8 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             )
 
             consumed_purchase_ids = st.session_state.review_purchase_consumed
-            consume_failed_purchase_ids = st.session_state.review_purchase_consume_failed
-            if (
-                purchase_id
-                and purchase_id not in consumed_purchase_ids
-                and purchase_id not in consume_failed_purchase_ids
-            ):
-                try:
-                    record = get_purchase_record(purchase_id)
-                    if (
-                        record
-                        and get_purchase_product_type(record) == PRODUCT_TYPE_REVIEW
-                        and is_purchase_ready(record)
-                    ):
-                        consume_purchase(purchase_id, logger)
-                        consumed_purchase_ids.add(purchase_id)
-                        st.success("PDFの準備が完了しました。今回の購入分は使用済みになりました。")
-                except Exception as exc:
-                    consume_failed_purchase_ids.add(purchase_id)
-                    logger.warning(
-                        "review_purchase_consume_failed",
-                        extra={
-                            "error_type": type(exc).__name__,
-                            "purchase_id": purchase_id,
-                            "product_type": PRODUCT_TYPE_REVIEW,
-                        },
-                    )
-                    st.warning("PDFはダウンロードできますが、購入状態の更新確認に失敗しました。時間をおいて再度ご確認ください。")
+            if purchase_id and purchase_id in consumed_purchase_ids:
+                st.success("PDFの準備が完了しました。今回の購入分は使用済みになりました。")
         else:
             st.warning("見返し便PDFの準備がまだ完了していません。もう一度生成をお試しください。")
 
@@ -1513,10 +1507,12 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                     image_count=len(image_parts),
                 )
 
+                if not consume_purchase(str(active_purchase.get("purchase_id") or ""), logger):
+                    st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+                    return
+
                 with st.spinner("龍神さまが降臨されています..."):
                     result = call_gemini_fortune(payload)
-
-                consume_purchase(active_purchase["purchase_id"], logger)
 
                 st.session_state.fortune_json = result
                 st.session_state.user_name = payload.user_name
