@@ -758,7 +758,8 @@ def render_checkout_reassurance(product_type: str, active_amount_jpy: int) -> No
     usage_notes = [
         f'<div style="margin-bottom:0.25rem;">・本サービスは1回{active_amount_jpy}円（税込）の単発課金です。</div>',
         '<div style="margin-bottom:0.25rem;">・月額課金や継続課金ではありません。</div>',
-        '<div style="margin-bottom:0.25rem;">・決済はStripeの安全な決済ページで行われます。</div>',
+        '<div style="margin-bottom:0.25rem;">・お支払いはStripeの安全な決済ページで行います。</div>',
+        '<div style="margin-bottom:0.25rem;">・クレジットカードのほか、ご利用環境によってはApple Pay、Google Pay、Linkなどの決済方法を選べる場合があります。</div>',
         '<div style="margin-bottom:0.25rem;">・こちらのページでは、クレジットカード番号を保存しません。</div>',
         f'<div style="margin-bottom:0.25rem;">・決済完了後、こちらのページに戻ると{form_label}が表示されます。</div>',
     ]
