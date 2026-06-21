@@ -1,6 +1,7 @@
 
 import datetime
 import html
+import json
 import logging
 import os
 import secrets
@@ -11,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -102,6 +104,7 @@ STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
 PRODUCT_TYPE_REGULAR = "regular"
 PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
+GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 ASSETS_DIR = BASE_DIR / "assets"
 SAMPLE_PDF_IMAGE_PATHS = [
     ASSETS_DIR / "sample_pdf_1.png",
@@ -182,6 +185,33 @@ def get_utm_params() -> dict[str, str]:
     return utm_params
 
 
+def has_purchase_return_query_params() -> bool:
+    return any(
+        get_query_param_value(key)
+        for key in ("session_id", "purchase_id", "access_token")
+    )
+
+
+def should_use_direct_checkout(
+    action: str | None,
+    product_type: str | None,
+    purchase_return_requested: bool,
+) -> bool:
+    return bool(
+        not purchase_return_requested
+        and (action or "").strip().lower() == "checkout"
+        and (product_type or "").strip().lower() == PRODUCT_TYPE_REGULAR
+    )
+
+
+def is_direct_checkout_request() -> bool:
+    return should_use_direct_checkout(
+        action=get_query_param_value("action"),
+        product_type=get_query_param_value("product_type"),
+        purchase_return_requested=has_purchase_return_query_params(),
+    )
+
+
 def normalize_product_type(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized in VALID_PRODUCT_TYPES:
@@ -213,14 +243,27 @@ def format_iso_date_japanese(value: str) -> str:
     return f"{parsed.year}年{parsed.month}月{parsed.day}日"
 
 
-def get_page_location() -> str:
-    query_params = {}
-    for key in st.query_params:
-        value = get_query_param_value(key)
-        if value is not None:
-            query_params[key] = value
-    query_string = urllib.parse.urlencode(query_params)
+def sanitize_page_location_for_ga4(
+    query_params: dict[str, str] | None = None,
+) -> str:
+    if query_params is None:
+        query_params = {}
+        for key in st.query_params:
+            value = get_query_param_value(key)
+            if value is not None:
+                query_params[key] = value
+
+    safe_query_params = {
+        key: value
+        for key, value in query_params.items()
+        if key not in GA4_SENSITIVE_QUERY_PARAMS
+    }
+    query_string = urllib.parse.urlencode(safe_query_params)
     return f"{APP_BASE_URL}/?{query_string}" if query_string else f"{APP_BASE_URL}/"
+
+
+def get_page_location() -> str:
+    return sanitize_page_location_for_ga4()
 
 
 def get_checkout_price_type(product_type: str, price_id: str) -> str:
@@ -670,6 +713,49 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
     )
 
 
+def render_checkout_auto_redirect(checkout_url: str) -> None:
+    checkout_url_json = json.dumps(checkout_url)
+    components.html(
+        f"""
+        <script>
+            window.setTimeout(function() {{
+                try {{
+                    window.top.location.href = {checkout_url_json};
+                }} catch (error) {{
+                    window.location.href = {checkout_url_json};
+                }}
+            }}, 250);
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_direct_checkout(logger: logging.Logger) -> None:
+    _, active_amount_jpy = get_active_checkout_price(PRODUCT_TYPE_REGULAR, logger)
+
+    if not STRIPE_ENABLED:
+        st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
+        return
+
+    checkout_url = st.session_state.get("checkout_url")
+    if checkout_url and st.session_state.get("checkout_product_type") != PRODUCT_TYPE_REGULAR:
+        clear_checkout_session_state()
+        checkout_url = None
+
+    if not checkout_url:
+        checkout_url, error_message = create_checkout_session(PRODUCT_TYPE_REGULAR, logger)
+        if error_message:
+            st.error("決済ページを準備できませんでした。時間をおいてもう一度お試しください。")
+            if SHOW_DEBUG:
+                st.caption(error_message)
+            return
+
+    st.info("決済ページへ移動しています。自動で移動しない場合は、下のボタンを押してください。")
+    render_checkout_link(checkout_url, active_amount_jpy)
+    render_checkout_auto_redirect(checkout_url)
+
+
 def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
     product_name = html.escape(get_product_display_name(product_type))
     review_note = ""
@@ -780,7 +866,11 @@ def render_checkout_reassurance(product_type: str, active_amount_jpy: int) -> No
     )
 
 
-def render_payment_section(product_type: str, logger: logging.Logger) -> dict[str, Any] | None:
+def render_payment_section(
+    product_type: str,
+    logger: logging.Logger,
+    allow_checkout_creation: bool = True,
+) -> dict[str, Any] | None:
     product_type = normalize_product_type(product_type)
     _, active_amount_jpy = get_active_checkout_price(product_type, logger)
     render_pre_payment_intro(product_type, active_amount_jpy)
@@ -808,6 +898,10 @@ def render_payment_section(product_type: str, logger: logging.Logger) -> dict[st
 
     if record and record.get("used_flag"):
         st.warning("この購入分はすでに使用済みです。再度ご利用の際は、新しくご購入ください。")
+
+    if not allow_checkout_creation:
+        st.info("決済結果を確認中です。数秒後に再読み込みしてください。")
+        return None
 
     checkout_url = st.session_state.get("checkout_url")
     if checkout_url and st.session_state.get("checkout_product_type") != product_type:
@@ -1609,6 +1703,8 @@ def main() -> None:
     render_app_css()
     init_session_state()
 
+    purchase_return_requested = has_purchase_return_query_params()
+    direct_checkout_requested = is_direct_checkout_request()
     active_purchase = get_current_purchase_record()
     requested_product_type = get_requested_product_type()
     display_product_type = (
@@ -1618,13 +1714,21 @@ def main() -> None:
     )
     track_streamlit_page_view(logger, display_product_type)
 
+    if direct_checkout_requested:
+        render_direct_checkout(logger)
+        return
+
     if active_purchase and active_purchase.get("used_flag"):
         render_completion_screen()
         st.stop()
 
     render_header()
 
-    active_purchase = render_payment_section(display_product_type, logger)
+    active_purchase = render_payment_section(
+        display_product_type,
+        logger,
+        allow_checkout_creation=not purchase_return_requested,
+    )
     render_notice_box()
     render_form_gap(2)
 
