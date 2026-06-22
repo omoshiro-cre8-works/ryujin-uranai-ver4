@@ -316,6 +316,10 @@ def render_app_css() -> None:
             background: #ffffff;
         }
 
+        [data-testid="stExpander"] [data-testid="stIconMaterial"] {
+            display: none !important;
+        }
+
         [data-testid="stExpanderDetails"] {
             background: #ffffff;
         }

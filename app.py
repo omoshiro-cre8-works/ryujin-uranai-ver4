@@ -996,6 +996,7 @@ def render_header() -> None:
     with header_left:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
         if miko_image_bytes:
+            st.html('<div style="height:0.6rem"></div>')
             render_inline_png(miko_image_bytes, alt="巫女画像", width=96)
         else:
             st.caption("miko画像なし")
