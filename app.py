@@ -1,4 +1,5 @@
 
+import base64
 import datetime
 import html
 import json
@@ -123,6 +124,36 @@ def read_image_bytes(image_path: str | Path) -> bytes | None:
     except OSError:
         return None
     return None
+
+
+def render_inline_png(
+    image_bytes: bytes,
+    *,
+    alt: str,
+    width: int | None = None,
+    caption: str | None = None,
+) -> None:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    safe_alt = html.escape(alt, quote=True)
+    width_style = f"width:{width}px;" if width else "width:100%;"
+    caption_html = (
+        f'<figcaption style="margin-top:0.35rem; color:#666666; font-size:0.85rem;">'
+        f"{html.escape(caption)}</figcaption>"
+        if caption
+        else ""
+    )
+    st.html(
+        f'''
+        <figure style="margin:0; text-align:center;">
+            <img
+                src="data:image/png;base64,{encoded}"
+                alt="{safe_alt}"
+                style="{width_style} max-width:100%; height:auto; display:block; margin:0 auto;"
+            >
+            {caption_html}
+        </figure>
+        '''
+    )
 
 
 def configure_logging() -> None:
@@ -813,10 +844,10 @@ def render_pdf_sample_section() -> None:
         with columns[index - 1]:
             image_bytes = read_image_bytes(image_path)
             if image_bytes:
-                st.image(
+                render_inline_png(
                     image_bytes,
+                    alt=f"PDF見本 {index}ページ目",
                     caption=f"PDF見本 {index}ページ目",
-                    use_container_width=True,
                 )
             else:
                 st.caption(f"PDF見本 {index}ページ目の画像を準備中です。")
@@ -932,7 +963,7 @@ def render_completion_screen() -> None:
     with center:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
         if miko_image_bytes:
-            st.image(miko_image_bytes, use_container_width=True)
+            render_inline_png(miko_image_bytes, alt="巫女画像")
 
     st.markdown(
         """
@@ -965,7 +996,7 @@ def render_header() -> None:
     with header_left:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
         if miko_image_bytes:
-            st.image(miko_image_bytes, width=96)
+            render_inline_png(miko_image_bytes, alt="巫女画像", width=96)
         else:
             st.caption("miko画像なし")
 
