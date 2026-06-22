@@ -2,7 +2,7 @@ import streamlit as st
 
 
 def render_app_css() -> None:
-    st.markdown(
+    st.html(
         '''
         <style>
         /* ===== 全体テーマ ===== */
@@ -410,5 +410,4 @@ def render_app_css() -> None:
         }
         </style>
         ''',
-        unsafe_allow_html=True,
     )
