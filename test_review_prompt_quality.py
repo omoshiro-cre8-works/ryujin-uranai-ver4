@@ -92,6 +92,56 @@ def test_review_prompt_suppresses_spiritual_sales_tone_and_repetition():
     assert "購入や継続利用を直接勧めない" in prompt
 
 
+def test_review_prompt_uses_soft_relationship_language():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "近況"},
+    )
+
+    assert "重ねて見ると" in prompt
+    assert "近い方向性が感じられます" in prompt
+    assert "矛盾しない印象です" in prompt
+    assert "強い確証表現を使わない" in prompt
+
+
+def test_review_prompt_limits_reassurance_family_and_new_guidance_tone():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "近況"},
+    )
+
+    assert "励まし表現の使用は本文全体で合計1〜2回まで" in prompt
+    assert "言い換えて意味を反復しない" in prompt
+    assert "龍神さまからの新たな導き" in prompt
+    assert "現在の流れをあらためて読み直す" in prompt
+    assert "今の状況を静かに見返す" in prompt
+
+
+def test_review_output_rejects_strong_confirmation_and_new_guidance():
+    for prohibited_text in (
+        "今回の画像は前回PDFの記述を裏付けるものです。",
+        "今回の画像は前回PDFの記述を証明しています。",
+        "今回の線は前回の読みと一致しています。",
+        "龍神さまからの新たな導きをお伝えします。",
+        "新しいお告げが示されたようです。",
+    ):
+        review_fortune = {
+            field: "静かな見返しです。"
+            for field in fortune_service.REVIEW_FORTUNE_FIELDS
+        }
+        review_fortune["current_changes"] = prohibited_text
+        review_fortune["review_summary_points"] = []
+        review_fortune["next_3_month_action_items"] = []
+        review_fortune["comparison_blocks"] = []
+
+        result = fortune_service.parse_review_fortune_result(
+            json.dumps({"review_fortune": review_fortune}, ensure_ascii=False)
+        )
+
+        assert not result["fortune_success"]
+        assert result["diagnostics"]["error_type"] == "ForbiddenPhrase"
+
+
 def test_review_output_rejects_previous_palm_image_comparison():
     review_fortune = {
         field: "静かな見返しです。"
