@@ -233,7 +233,7 @@ def should_use_direct_checkout(
     return bool(
         not purchase_return_requested
         and (action or "").strip().lower() == "checkout"
-        and (product_type or "").strip().lower() == PRODUCT_TYPE_REGULAR
+        and (product_type or "").strip().lower() in VALID_PRODUCT_TYPES
     )
 
 
@@ -523,11 +523,14 @@ def is_purchase_ready(record: dict[str, Any] | None) -> bool:
 
 
 def stripe_client_ready(product_type: str = PRODUCT_TYPE_REGULAR) -> bool:
-    if not STRIPE_ENABLED:
+    if not stripe or not STRIPE_SECRET_KEY:
         return False
-    if normalize_product_type(product_type) == PRODUCT_TYPE_REVIEW and not STRIPE_PRICE_ID_REVIEW:
+    normalized_product_type = normalize_product_type(product_type)
+    if normalized_product_type == PRODUCT_TYPE_REVIEW:
+        if not STRIPE_PRICE_ID_REVIEW:
+            return False
+    elif not STRIPE_PRICE_ID_REGULAR:
         return False
-    assert stripe is not None
     stripe.api_key = STRIPE_SECRET_KEY
     return True
 
@@ -808,28 +811,45 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
 
 
 
-def render_direct_checkout(logger: logging.Logger) -> None:
-    _, active_amount_jpy = get_active_checkout_price(PRODUCT_TYPE_REGULAR, logger)
+def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
+    product_type = normalize_product_type(product_type)
+    _, active_amount_jpy = get_active_checkout_price(product_type, logger)
 
-    if not STRIPE_ENABLED:
+    if not stripe_client_ready(product_type):
         st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
         return
 
     checkout_url = st.session_state.get("checkout_url")
-    if checkout_url and st.session_state.get("checkout_product_type") != PRODUCT_TYPE_REGULAR:
+    if checkout_url and st.session_state.get("checkout_product_type") != product_type:
         clear_checkout_session_state()
         checkout_url = None
 
     if not checkout_url:
-        checkout_url, error_message = create_checkout_session(PRODUCT_TYPE_REGULAR, logger)
+        checkout_url, error_message = create_checkout_session(product_type, logger)
         if error_message:
             st.error("決済ページを準備できませんでした。時間をおいてもう一度お試しください。")
             if SHOW_DEBUG:
                 st.caption(error_message)
             return
 
-    st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
+    if product_type == PRODUCT_TYPE_REVIEW:
+        st.markdown("## 龍神さまのお告げ 見返し便")
+        st.markdown(
+            "前回の鑑定PDFをもとに、現在の手相画像・近況・見返したいテーマを重ねて、"
+            "今のあなたに向けたお告げをお届けします。"
+        )
+        st.markdown(
+            f"**ご利用料金：{active_amount_jpy}円（税込）**  "
+            "\n1回の購入につき、鑑定の実行は1回のみです。  "
+            "\n決済完了後、入力フォームが表示されます。"
+        )
+    else:
+        st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
+
     render_checkout_link(checkout_url, active_amount_jpy)
+
+    if product_type == PRODUCT_TYPE_REVIEW:
+        st.info("決済が完了すると、このページに戻り、見返し便フォームが表示されます。")
 
 
 def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
@@ -1796,7 +1816,7 @@ def main() -> None:
     track_streamlit_page_view(logger, display_product_type)
 
     if direct_checkout_requested:
-        render_direct_checkout(logger)
+        render_direct_checkout(requested_product_type, logger)
         return
 
     if active_purchase and active_purchase.get("used_flag"):
