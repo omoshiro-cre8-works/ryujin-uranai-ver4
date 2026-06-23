@@ -1735,9 +1735,26 @@ def main() -> None:
         render_completion_screen()
         st.stop()
 
+    if active_purchase:
+        if is_purchase_ready(active_purchase):
+            render_header()
+            if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
+                render_review_fortune_form(active_purchase, logger)
+            else:
+                render_fortune_form(active_purchase, logger)
+            st.divider()
+            return
+
+        if active_purchase.get("payment_status") != "paid":
+            st.info("決済結果を確認中です。数秒後に再読み込みしてください。")
+            return
+
+        st.warning("この購入情報は現在ご利用いただけません。再度ご購入の際は、新しくお手続きください。")
+        return
+
     render_header()
 
-    active_purchase = render_payment_section(
+    render_payment_section(
         display_product_type,
         logger,
         allow_checkout_creation=not purchase_return_requested,
@@ -1745,20 +1762,9 @@ def main() -> None:
     render_notice_box()
     render_form_gap(2)
 
-    if active_purchase and active_purchase.get("used_flag"):
-        render_completion_screen()
-        st.stop()
-    elif active_purchase:
-        if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
-            render_review_fortune_form(active_purchase, logger)
-        else:
-            render_fortune_form(active_purchase, logger)
-    else:
-        st.info("決済が完了すると、こちらのページに戻り、鑑定フォームが表示されます。")
-        st.divider()
-        return
-
+    st.info("決済が完了すると、こちらのページに戻り、鑑定フォームが表示されます。")
     st.divider()
+    return
 
 
 if __name__ == "__main__":
