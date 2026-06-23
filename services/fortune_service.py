@@ -222,7 +222,24 @@ REVIEW_FORTUNE_COMPARISON_FIELDS = [
     'reinterpretation',
 ]
 
-REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
+REVIEW_FORTUNE_BLOCKING_PHRASES = [
+    # 前回画像を保存・記憶・比較しているという重大なプライバシー誤認
+    '前回の手相画像と比べると',
+    '前回の手相にも見られた線が',
+    '以前の手相画像では',
+    '前回の手の状態から見ると',
+    '前回の画像を見返すと',
+    '前回から手相が変化している',
+    '前回と同じ線が今回も',
+    # 医療・投資・転職に関する危険な断定や指示
+    '投資すべき',
+    '転職すべき',
+    '治ります',
+    '診断します',
+]
+
+REVIEW_FORTUNE_ADVISORY_PHRASES = [
+    # 文体・品質上は避けたいが、成果物全体を破棄するほどではない表現
     '絶対に',
     '必ず成功',
     '必ず当たる',
@@ -236,10 +253,6 @@ REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
     '前回の鑑定は間違っていました',
     'あなたはこうするべきです',
     'すべきです',
-    '投資すべき',
-    '転職すべき',
-    '治ります',
-    '診断します',
     'そなた',
     '龍神の力',
     '大いなる流れ',
@@ -250,13 +263,6 @@ REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
     '龍神が示す',
     '龍神に導かれ',
     '豊かな未来が必ず',
-    '前回の手相画像と比べると',
-    '前回の手相にも見られた線が',
-    '以前の手相画像では',
-    '前回の手の状態から見ると',
-    '前回の画像を見返すと',
-    '前回から手相が変化している',
-    '前回と同じ線が今回も',
     '裏付ける',
     '証拠',
     '証明',
@@ -267,7 +273,6 @@ REVIEW_FORTUNE_FORBIDDEN_PHRASES = [
     '新たな導き',
     '新しいお告げが示された',
 ]
-
 
 
 def get_gemini_client(api_key: str) -> genai.Client:
@@ -891,16 +896,25 @@ def parse_review_fortune_result(raw_text: str) -> dict[str, Any]:
     for block in review_fortune.get('comparison_blocks') or []:
         combined_text_parts.extend(str(block.get(field) or '') for field in REVIEW_FORTUNE_COMPARISON_FIELDS)
     combined_text = '\n'.join(combined_text_parts)
-    forbidden_phrase_detected = any(phrase in combined_text for phrase in REVIEW_FORTUNE_FORBIDDEN_PHRASES)
+    blocking_phrases = [
+        phrase for phrase in REVIEW_FORTUNE_BLOCKING_PHRASES if phrase in combined_text
+    ]
+    advisory_phrases = [
+        phrase for phrase in REVIEW_FORTUNE_ADVISORY_PHRASES if phrase in combined_text
+    ]
     missing_sections = [field for field in REVIEW_FORTUNE_FIELDS if not review_fortune[field]]
-    if forbidden_phrase_detected:
+    if blocking_phrases:
         return _empty_review_fortune(
-            '見返し便鑑定本文に避けたい表現が含まれていました。',
+            '見返し便鑑定本文に重大な避けたい表現が含まれていました。',
             {
                 'failed_step': 'parse_response',
                 'error_type': 'ForbiddenPhrase',
                 'missing_sections_count': len(missing_sections),
                 'forbidden_phrase_detected': True,
+                'blocking_phrase_detected': True,
+                'blocking_phrase_count': len(blocking_phrases),
+                'advisory_phrase_detected': bool(advisory_phrases),
+                'advisory_phrase_count': len(advisory_phrases),
             },
         )
 
@@ -914,6 +928,10 @@ def parse_review_fortune_result(raw_text: str) -> dict[str, Any]:
             'error_type': '',
             'missing_sections_count': len(missing_sections),
             'forbidden_phrase_detected': False,
+            'blocking_phrase_detected': False,
+            'blocking_phrase_count': 0,
+            'advisory_phrase_detected': bool(advisory_phrases),
+            'advisory_phrase_count': len(advisory_phrases),
         },
     }
 
@@ -1210,6 +1228,10 @@ def call_gemini_review_fortune(
     result_error_type = str(parse_diagnostics.get('error_type') or '')
     missing_sections_count = int(parse_diagnostics.get('missing_sections_count') or 0)
     forbidden_phrase_detected = bool(parse_diagnostics.get('forbidden_phrase_detected'))
+    blocking_phrase_detected = bool(parse_diagnostics.get('blocking_phrase_detected'))
+    blocking_phrase_count = int(parse_diagnostics.get('blocking_phrase_count') or 0)
+    advisory_phrase_detected = bool(parse_diagnostics.get('advisory_phrase_detected'))
+    advisory_phrase_count = int(parse_diagnostics.get('advisory_phrase_count') or 0)
     result['diagnostics'] = {
         **diagnostics_base,
         'failed_step': result_failed_step,
@@ -1217,7 +1239,17 @@ def call_gemini_review_fortune(
         'error_message_short': '',
         'missing_sections_count': missing_sections_count,
         'forbidden_phrase_detected': forbidden_phrase_detected,
+        'blocking_phrase_detected': blocking_phrase_detected,
+        'blocking_phrase_count': blocking_phrase_count,
+        'advisory_phrase_detected': advisory_phrase_detected,
+        'advisory_phrase_count': advisory_phrase_count,
     }
+    if advisory_phrase_detected:
+        logger.warning(
+            'review_fortune_advisory_phrase_detected '
+            f"advisory_phrase_count={advisory_phrase_count} "
+            f"fortune_success={bool(result.get('fortune_success'))} image_count={len(image_parts)}"
+        )
     safe_reason = re.sub(r'[^0-9A-Za-z_\-ぁ-んァ-ヶ一-龠々ー。・、 ]+', '', str(result.get('reason') or ''))
     if len(safe_reason) > 80:
         safe_reason = safe_reason[:80]
@@ -1226,7 +1258,11 @@ def call_gemini_review_fortune(
         f"fortune_success={bool(result.get('fortune_success'))} "
         f"failed_step={result_failed_step} error_type={result_error_type} "
         f"reason={safe_reason} missing_sections_count={missing_sections_count} "
-        f"forbidden_phrase_detected={forbidden_phrase_detected} image_count={len(image_parts)}"
+        f"forbidden_phrase_detected={forbidden_phrase_detected} "
+        f"blocking_phrase_detected={blocking_phrase_detected} "
+        f"blocking_phrase_count={blocking_phrase_count} "
+        f"advisory_phrase_detected={advisory_phrase_detected} "
+        f"advisory_phrase_count={advisory_phrase_count} image_count={len(image_parts)}"
     )
     return result
 

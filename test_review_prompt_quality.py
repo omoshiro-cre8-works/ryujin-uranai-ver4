@@ -117,8 +117,8 @@ def test_review_prompt_limits_reassurance_family_and_new_guidance_tone():
     assert "今の状況を静かに見返す" in prompt
 
 
-def test_review_output_rejects_strong_confirmation_and_new_guidance():
-    for prohibited_text in (
+def test_review_output_allows_advisory_phrases_with_diagnostics():
+    for advisory_text in (
         "今回の画像は前回PDFの記述を裏付けるものです。",
         "今回の画像は前回PDFの記述を証明しています。",
         "今回の線は前回の読みと一致しています。",
@@ -129,7 +129,7 @@ def test_review_output_rejects_strong_confirmation_and_new_guidance():
             field: "静かな見返しです。"
             for field in fortune_service.REVIEW_FORTUNE_FIELDS
         }
-        review_fortune["current_changes"] = prohibited_text
+        review_fortune["current_changes"] = advisory_text
         review_fortune["review_summary_points"] = []
         review_fortune["next_3_month_action_items"] = []
         review_fortune["comparison_blocks"] = []
@@ -138,8 +138,11 @@ def test_review_output_rejects_strong_confirmation_and_new_guidance():
             json.dumps({"review_fortune": review_fortune}, ensure_ascii=False)
         )
 
-        assert not result["fortune_success"]
-        assert result["diagnostics"]["error_type"] == "ForbiddenPhrase"
+        assert result["fortune_success"]
+        assert result["diagnostics"]["error_type"] == ""
+        assert result["diagnostics"]["advisory_phrase_detected"]
+        assert result["diagnostics"]["advisory_phrase_count"] >= 1
+        assert not result["diagnostics"]["blocking_phrase_detected"]
 
 
 def test_review_output_rejects_previous_palm_image_comparison():
@@ -158,9 +161,11 @@ def test_review_output_rejects_previous_palm_image_comparison():
 
     assert not result["fortune_success"]
     assert result["diagnostics"]["error_type"] == "ForbiddenPhrase"
+    assert result["diagnostics"]["blocking_phrase_detected"]
+    assert result["diagnostics"]["blocking_phrase_count"] >= 1
 
 
-def test_review_output_rejects_representative_forbidden_phrase():
+def test_review_output_allows_style_phrase_with_advisory_diagnostics():
     review_fortune = {
         field: "静かな見返しです。"
         for field in fortune_service.REVIEW_FORTUNE_FIELDS
@@ -174,5 +179,7 @@ def test_review_output_rejects_representative_forbidden_phrase():
         json.dumps({"review_fortune": review_fortune}, ensure_ascii=False)
     )
 
-    assert not result["fortune_success"]
-    assert result["diagnostics"]["error_type"] == "ForbiddenPhrase"
+    assert result["fortune_success"]
+    assert result["diagnostics"]["advisory_phrase_detected"]
+    assert result["diagnostics"]["advisory_phrase_count"] == 2
+    assert not result["diagnostics"]["blocking_phrase_detected"]
