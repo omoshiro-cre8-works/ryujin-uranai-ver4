@@ -2,7 +2,6 @@
 import base64
 import datetime
 import html
-import json
 import logging
 import os
 import secrets
@@ -13,7 +12,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -546,6 +544,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
         assert stripe is not None
         session = stripe.checkout.Session.create(
             mode="payment",
+            payment_method_types=["card"],
             line_items=[
                 {
                     "price": active_price_id,
@@ -744,23 +743,6 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
     )
 
 
-def render_checkout_auto_redirect(checkout_url: str) -> None:
-    checkout_url_json = json.dumps(checkout_url)
-    components.html(
-        f"""
-        <script>
-            window.setTimeout(function() {{
-                try {{
-                    window.top.location.href = {checkout_url_json};
-                }} catch (error) {{
-                    window.location.href = {checkout_url_json};
-                }}
-            }}, 250);
-        </script>
-        """,
-        height=0,
-    )
-
 
 def render_direct_checkout(logger: logging.Logger) -> None:
     _, active_amount_jpy = get_active_checkout_price(PRODUCT_TYPE_REGULAR, logger)
@@ -782,9 +764,8 @@ def render_direct_checkout(logger: logging.Logger) -> None:
                 st.caption(error_message)
             return
 
-    st.info("決済ページへ移動しています。自動で移動しない場合は、下のボタンを押してください。")
+    st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
     render_checkout_link(checkout_url, active_amount_jpy)
-    render_checkout_auto_redirect(checkout_url)
 
 
 def render_pre_payment_intro(product_type: str, active_amount_jpy: int) -> None:
