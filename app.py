@@ -166,6 +166,10 @@ def configure_logging() -> None:
 def init_session_state() -> None:
     if "fortune_json" not in st.session_state:
         st.session_state.fortune_json = None
+    if "fortune_pdf_bytes" not in st.session_state:
+        st.session_state.fortune_pdf_bytes = None
+    if "fortune_pdf_purchase_id" not in st.session_state:
+        st.session_state.fortune_pdf_purchase_id = None
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
     if "active_purchase_id" not in st.session_state:
@@ -673,6 +677,18 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
         },
     )
     return True
+
+
+def generate_regular_fortune_pdf_and_consume(
+    payload: FortuneInput,
+    purchase_id: str,
+    logger: logging.Logger,
+) -> tuple[dict[str, Any], bytes] | None:
+    result = call_gemini_fortune(payload)
+    pdf_data = generate_miko_letter_pdf(payload.user_name, result)
+    if not consume_purchase(purchase_id, logger):
+        return None
+    return result, pdf_data
 
 
 def get_current_purchase_record() -> dict[str, Any] | None:
@@ -1568,6 +1584,9 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
     render_form_gap(2)
 
     if st.button("🐉 龍神さまのお告げを聞く"):
+        st.session_state.fortune_json = None
+        st.session_state.fortune_pdf_bytes = None
+        st.session_state.fortune_pdf_purchase_id = None
         record = get_purchase_record(active_purchase.get("purchase_id"))
         if not is_purchase_ready(record):
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
@@ -1615,14 +1634,23 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                     image_count=len(image_parts),
                 )
 
-                if not consume_purchase(str(active_purchase.get("purchase_id") or ""), logger):
-                    st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
+                with st.spinner("龍神さまが降臨されています..."):
+                    purchase_id = str(active_purchase.get("purchase_id") or "")
+                    completed = generate_regular_fortune_pdf_and_consume(
+                        payload,
+                        purchase_id,
+                        logger,
+                    )
+
+                if completed is None:
+                    st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
+                    st.error("解消しない場合は、お問い合わせください。")
                     return
 
-                with st.spinner("龍神さまが降臨されています..."):
-                    result = call_gemini_fortune(payload)
-
+                result, pdf_data = completed
                 st.session_state.fortune_json = result
+                st.session_state.fortune_pdf_bytes = pdf_data
+                st.session_state.fortune_pdf_purchase_id = purchase_id
                 st.session_state.user_name = payload.user_name
 
                 st.success("お告げを授かりました。今回の購入分は使用済みになりました。")
@@ -1676,9 +1704,9 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
         render_html_box("結び", data.get("miko_closing", ""))
 
-        try:
-            pdf_data = generate_miko_letter_pdf(st.session_state.user_name, data)
-            purchase_id = active_purchase.get("purchase_id")
+        pdf_data = st.session_state.get("fortune_pdf_bytes")
+        purchase_id = active_purchase.get("purchase_id")
+        if pdf_data and st.session_state.get("fortune_pdf_purchase_id") == purchase_id:
             tracked_purchase_ids = st.session_state.ga4_pdf_generated_purchase_ids
             if purchase_id and purchase_id not in tracked_purchase_ids:
                 track_ga4_event("pdf_generated", logger, {"product_type": product_type})
@@ -1690,10 +1718,6 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 file_name=f"miko_letter_{safe_name}.pdf",
                 mime="application/pdf",
             )
-        except Exception as exc:
-            st.error("PDF鑑定書の作成に失敗しました。フォントファイル、巫女画像、設定内容を確認してください。")
-            if SHOW_DEBUG:
-                st.caption(str(exc))
 
         if SHOW_DEBUG:
             with st.expander("確認メモ"):
