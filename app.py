@@ -691,6 +691,54 @@ def generate_regular_fortune_pdf_and_consume(
     return result, pdf_data
 
 
+def generate_review_fortune_pdf_and_consume(
+    uploaded_pdf_bytes: bytes,
+    pdf_analysis: dict[str, Any],
+    current_inputs: dict[str, Any],
+    current_private_inputs: dict[str, Any],
+    image_parts: list[Any],
+    purchase_id: str,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
+    if not pdf_summary.get("summary_success"):
+        return {
+            "status": "summary_failed",
+            "pdf_summary": pdf_summary,
+        }
+
+    review_context = build_review_context(
+        pdf_analysis=pdf_analysis,
+        previous_summary=pdf_summary.get("previous_summary") or {},
+        current_inputs=current_inputs,
+    )
+    review_fortune_result = call_gemini_review_fortune(
+        review_context=review_context,
+        current_private_inputs=current_private_inputs,
+        image_parts=image_parts,
+    )
+    if not review_fortune_result.get("fortune_success"):
+        return {
+            "status": "fortune_failed",
+            "review_fortune_result": review_fortune_result,
+        }
+
+    review_fortune = review_fortune_result.get("review_fortune") or {}
+    pdf_data = generate_review_fortune_pdf(
+        review_fortune=review_fortune,
+        review_context=review_context,
+    )
+    if not consume_purchase(purchase_id, logger):
+        return {"status": "consume_failed"}
+
+    return {
+        "status": "success",
+        "review_context": review_context,
+        "review_fortune": review_fortune,
+        "pdf_data": pdf_data,
+    }
+
+
 def get_current_purchase_record() -> dict[str, Any] | None:
     session_id = st.query_params.get("session_id")
     access_token = get_query_param_value("access_token")
@@ -1222,81 +1270,35 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     st.caption(f"error_type={type(exc).__name__} / failed_step=build_image_parts")
                 return
 
+            palm_image_count = len(uploaded_files or [])
+            current_inputs = {
+                "birth_time_text": review_birth_time_text,
+                "selected_theme": review_theme,
+                "review_memo_present": bool(normalize_text(review_memo)),
+                "palm_image_count": palm_image_count,
+            }
+            current_private_inputs = {
+                "user_name": normalize_text(user_name),
+                "birth_date": birth_date.isoformat() if birth_date else "",
+                "birth_time_text": review_birth_time_text,
+                "selected_theme": review_theme,
+                "review_memo": normalize_text(review_memo),
+                "palm_image_count": palm_image_count,
+                "current_palm_image_status": "attached" if palm_image_count > 0 else "not_attached",
+            }
             purchase_id = str(active_purchase.get("purchase_id") or "")
-            if not consume_purchase(purchase_id, logger):
-                st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
-                return
-            st.session_state.review_purchase_consumed.add(purchase_id)
-
-            with st.spinner("前回のお告げを要約し、時間の流れを整理しています..."):
-                pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
-
-            if not pdf_summary.get("summary_success"):
-                st.error("前回PDFの要約中にエラーが発生しました。")
-                st.error("時間をおいてもう一度お試しください。")
-                if SHOW_DEBUG:
-                    diagnostics = pdf_summary.get("diagnostics") or {}
-                    st.caption(
-                        f"failed_step={diagnostics.get('failed_step', '')} / "
-                        f"error_type={diagnostics.get('error_type', '')} / "
-                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)} / "
-                        f"pdf_size_bytes={diagnostics.get('pdf_size_bytes', len(uploaded_pdf_bytes))} / "
-                        f"mime_type={diagnostics.get('mime_type', 'application/pdf')}"
-                    )
-                return
-
-            review_context = build_review_context(
-                pdf_analysis=pdf_analysis,
-                previous_summary=pdf_summary.get("previous_summary") or {},
-                current_inputs={
-                    "birth_time_text": review_birth_time_text,
-                    "selected_theme": review_theme,
-                    "review_memo_present": bool(normalize_text(review_memo)),
-                    "palm_image_count": len(uploaded_files or []),
-                },
-            )
-            st.session_state.review_context = review_context
-
-            with st.spinner("見返し便の鑑定本文を生成しています..."):
-                palm_image_count = len(uploaded_files or [])
-                review_fortune_result = call_gemini_review_fortune(
-                    review_context=review_context,
-                    current_private_inputs={
-                        "user_name": normalize_text(user_name),
-                        "birth_date": birth_date.isoformat() if birth_date else "",
-                        "birth_time_text": review_birth_time_text,
-                        "selected_theme": review_theme,
-                        "review_memo": normalize_text(review_memo),
-                        "palm_image_count": palm_image_count,
-                        "current_palm_image_status": "attached" if palm_image_count > 0 else "not_attached",
-                    },
-                    image_parts=image_parts,
-                )
-
-            if not review_fortune_result.get("fortune_success"):
-                st.error("見返し便の鑑定本文生成中にエラーが発生しました。")
-                st.error("時間をおいてもう一度お試しください。")
-                if SHOW_DEBUG:
-                    diagnostics = review_fortune_result.get("diagnostics") or {}
-                    st.caption(
-                        f"failed_step={diagnostics.get('failed_step', '')} / "
-                        f"error_type={diagnostics.get('error_type', '')} / "
-                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)}"
-                    )
-                return
-
-            st.session_state.review_fortune = review_fortune_result.get("review_fortune") or {}
-            st.session_state.review_fortune_purchase_id = active_purchase.get("purchase_id")
-
             try:
-                st.session_state.review_pdf_bytes = generate_review_fortune_pdf(
-                    review_fortune=st.session_state.review_fortune,
-                    review_context=review_context,
-                )
-                st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
+                with st.spinner("前回のお告げを要約し、見返し便の鑑定とPDFを生成しています..."):
+                    completed = generate_review_fortune_pdf_and_consume(
+                        uploaded_pdf_bytes=uploaded_pdf_bytes,
+                        pdf_analysis=pdf_analysis,
+                        current_inputs=current_inputs,
+                        current_private_inputs=current_private_inputs,
+                        image_parts=image_parts,
+                        purchase_id=purchase_id,
+                        logger=logger,
+                    )
             except Exception as exc:
-                st.session_state.review_pdf_bytes = None
-                st.session_state.review_pdf_generated_purchase_id = None
                 st.error("見返し便PDFの生成中にエラーが発生しました。")
                 st.error("ページを再読み込みせず、時間をおいてもう一度お試しください。")
                 if SHOW_DEBUG:
@@ -1307,6 +1309,48 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                         f"product_type={product_type}"
                     )
                 return
+
+            if completed.get("status") == "summary_failed":
+                st.error("前回PDFの要約中にエラーが発生しました。")
+                st.error("時間をおいてもう一度お試しください。")
+                if SHOW_DEBUG:
+                    pdf_summary = completed.get("pdf_summary") or {}
+                    diagnostics = pdf_summary.get("diagnostics") or {}
+                    st.caption(
+                        f"failed_step={diagnostics.get('failed_step', '')} / "
+                        f"error_type={diagnostics.get('error_type', '')} / "
+                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)} / "
+                        f"pdf_size_bytes={diagnostics.get('pdf_size_bytes', len(uploaded_pdf_bytes))} / "
+                        f"mime_type={diagnostics.get('mime_type', 'application/pdf')}"
+                    )
+                return
+
+            if completed.get("status") == "fortune_failed":
+                st.error("見返し便の鑑定本文生成中にエラーが発生しました。")
+                st.error("時間をおいてもう一度お試しください。")
+                if SHOW_DEBUG:
+                    review_fortune_result = completed.get("review_fortune_result") or {}
+                    diagnostics = review_fortune_result.get("diagnostics") or {}
+                    st.caption(
+                        f"failed_step={diagnostics.get('failed_step', '')} / "
+                        f"error_type={diagnostics.get('error_type', '')} / "
+                        f"model_name={diagnostics.get('model_name', GEMINI_MODEL)}"
+                    )
+                return
+
+            if completed.get("status") == "consume_failed":
+                st.error("購入権の確認に失敗しました。")
+                st.error("ページを更新せず、時間をおいて再度お試しください。")
+                st.error("解消しない場合は、お問い合わせください。")
+                return
+
+            review_context = completed.get("review_context") or {}
+            st.session_state.review_context = review_context
+            st.session_state.review_fortune = completed.get("review_fortune") or {}
+            st.session_state.review_fortune_purchase_id = active_purchase.get("purchase_id")
+            st.session_state.review_pdf_bytes = completed.get("pdf_data")
+            st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
+            st.session_state.review_purchase_consumed.add(purchase_id)
 
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
             current_reference_text = (
