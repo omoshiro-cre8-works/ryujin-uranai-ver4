@@ -269,7 +269,7 @@ def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
             block["current_status"],
             block["reinterpretation"],
         ]
-        body = "\n".join(part for part in body_parts if part)
+        body = " ".join(part for part in body_parts if part)
         formatted_blocks.append("\n".join(part for part in [f"■ {theme}", body] if part))
     return "\n\n".join(formatted_blocks)
 
@@ -300,7 +300,6 @@ def generate_review_fortune_pdf(
     reflection_text = intro_text or _format_review_summary_points(review_fortune)
     alignment_text = join_parts([
         _format_comparison_blocks(review_fortune),
-        str((review_fortune or {}).get("continuing_flow") or ""),
         str((review_fortune or {}).get("current_changes") or ""),
         str((review_fortune or {}).get("theme_review") or ""),
     ])

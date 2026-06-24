@@ -85,6 +85,31 @@ def test_review_prompt_strengthens_current_palm_section_when_image_exists():
 
 
 
+
+def test_review_prompt_compresses_section_length_and_summary_overlap():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "近況"},
+    )
+
+    assert "全体として1〜2割短い印象" in prompt
+    assert "今回の相談テーマに関係する部分を優先して3〜5項目程度" in prompt
+    assert "1章と2章で同じ前回鑑定要約を繰り返さない" in prompt
+    assert "2章後半に総括を書く場合は2〜4文程度" in prompt
+
+
+def test_review_prompt_keeps_actions_and_closing_roles_separate():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "近況"},
+    )
+
+    assert "3章本文と同じ内容を再掲せず、具体行動は箇条書きに集約" in prompt
+    assert "説明文は1〜2文に抑え" in prompt
+    assert "3章の行動リストを再掲せず" in prompt
+    assert "龍神さまは大きな方向性、巫女は続ける工夫、結びは短い締め" in prompt
+    assert "things_to_remember は1〜3文程度" in prompt
+
 def test_review_prompt_asks_to_merge_alignment_blocks_without_repeated_labels():
     prompt = fortune_service.build_review_fortune_prompt(
         make_review_context(1),
@@ -139,7 +164,7 @@ def test_review_prompt_suppresses_spiritual_sales_tone_and_repetition():
     assert "は使わない" in prompt
     assert "同じ助言・励まし・結論は本文全体で原則1回" in prompt
     assert "語句を言い換えただけの反復も避ける" in prompt
-    assert "1〜3カ月ほどが読み返しの目安" in prompt
+    assert "少し時間を置いて読み返す" in prompt
     assert "購入や継続利用を直接勧めない" in prompt
 
 
