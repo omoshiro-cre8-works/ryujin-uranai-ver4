@@ -51,8 +51,22 @@ def test_review_prompt_declares_information_boundary_and_review_structure():
     assert "参照できる前回情報は、今回ユーザーがアップロードした前回鑑定PDF" in prompt
     assert "前回の手相画像と比べると" in prompt
     assert "受け取られる表現は禁止する" in prompt
-    assert "前回のお告げ → 現在の状況 → 今回の読み直し" in prompt
-    assert "今も活かせること → 見直した方がよいこと" in prompt
+    assert "見返し便の基本思想" in prompt
+    assert "最重要情報" in prompt
+    assert "相談者が選んだ「今回とくに見返したいテーマ」" in prompt
+    assert "見返し便としての7章構成" in prompt
+
+
+def test_review_prompt_prioritizes_theme_and_supplemental_context():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "仕事の方向性を見返したい"},
+    )
+
+    assert "相談テーマと補足情報を鑑定全体の軸" in prompt
+    assert "今回何を見返したいのかを中心" in prompt
+    assert "current_private_inputs の review_memo" in prompt
+    assert "相談テーマと補足情報から外れた一般論を広げず" in prompt
 
 
 def test_review_prompt_strengthens_current_palm_section_when_image_exists():
@@ -88,7 +102,7 @@ def test_review_prompt_suppresses_spiritual_sales_tone_and_repetition():
     assert "は使わない" in prompt
     assert "同じ助言・励まし・結論は本文全体で原則1回" in prompt
     assert "語句を言い換えただけの反復も避ける" in prompt
-    assert "1〜3カ月ほどが一つの目安" in prompt
+    assert "1〜3カ月ほどが読み返しの目安" in prompt
     assert "購入や継続利用を直接勧めない" in prompt
 
 

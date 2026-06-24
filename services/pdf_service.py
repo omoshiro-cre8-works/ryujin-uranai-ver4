@@ -16,14 +16,13 @@ from services.formatter_service import normalize_fortune_result
 
 REVIEW_PDF_TITLE = "龍神さまのお告げ 見返し便"
 REVIEW_FORTUNE_SECTION_TITLES = [
-    ("はじめに", "intro"),
-    ("前回のお告げから続いている流れ", "continuing_flow"),
-    ("今回のテーマについての見返し", "theme_review"),
-    ("これから3カ月ほど意識したいこと", "next_3_months"),
+    ("前回のお告げの振り返り", "intro"),
+    ("前回のお告げと現在の状況との照らし合わせ", "theme_review"),
+    ("これから3カ月ほど意識したいことや小さな行動", "next_3_months"),
     ("1年先に向けて整えていくこと", "one_year_guidance"),
-    ("龍神さまからの見返しの言葉", "ryujin_message"),
+    ("龍神さまからの見返しのことば", "ryujin_message"),
     ("巫女の助言", "miko_advice"),
-    ("心に留めること", "things_to_remember"),
+    ("結び", "things_to_remember"),
 ]
 REVIEW_FORTUNE_COMPARISON_FIELDS = [
     "theme",
@@ -298,20 +297,33 @@ def generate_review_fortune_pdf(
     previous_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("previous_reading_date", ""))
     current_reading_date = _format_iso_date_japanese(previous_pdf_analysis.get("current_reading_date", ""))
     selected_theme = str(current_inputs.get("selected_theme") or "未選択")
-    base_sections = build_review_pdf_sections(review_fortune)
-    current_changes_section = (
-        _current_changes_title(review_context),
-        str((review_fortune or {}).get("current_changes") or "").strip(),
-    )
+
+    def join_parts(parts: list[str]) -> str:
+        return "\n\n".join(part for part in (p.strip() for p in parts) if part)
+
+    reflection_text = join_parts([
+        _format_review_summary_points(review_fortune),
+        str((review_fortune or {}).get("intro") or ""),
+    ])
+    alignment_text = join_parts([
+        _format_comparison_blocks(review_fortune),
+        str((review_fortune or {}).get("continuing_flow") or ""),
+        str((review_fortune or {}).get("current_changes") or ""),
+        str((review_fortune or {}).get("theme_review") or ""),
+    ])
+    three_month_text = join_parts([
+        str((review_fortune or {}).get("next_3_months") or ""),
+        _format_next_3_month_action_items(review_fortune),
+    ])
+    closing_text = str((review_fortune or {}).get("things_to_remember") or "").strip()
     sections = [
-        ("今回の見返しポイント", _format_review_summary_points(review_fortune)),
-        base_sections[0],
-        ("前回のお告げと現在の照らし合わせ", _format_comparison_blocks(review_fortune)),
-        base_sections[1],
-        current_changes_section,
-        base_sections[2],
-        ("これから3カ月の小さな行動", _format_next_3_month_action_items(review_fortune)),
-        *base_sections[3:],
+        ("前回のお告げの振り返り", reflection_text),
+        ("前回のお告げと現在の状況との照らし合わせ", alignment_text),
+        ("これから3カ月ほど意識したいことや小さな行動", three_month_text),
+        ("1年先に向けて整えていくこと", str((review_fortune or {}).get("one_year_guidance") or "").strip()),
+        ("龍神さまからの見返しのことば", str((review_fortune or {}).get("ryujin_message") or "").strip()),
+        ("巫女の助言", str((review_fortune or {}).get("miko_advice") or "").strip()),
+        ("結び", closing_text),
     ]
 
     buffer = io.BytesIO()
@@ -414,7 +426,8 @@ def generate_review_fortune_pdf(
     for title, text in sections:
         add_section(title, text)
 
-    add_section("結び", "ここに記した見返しの言葉が、これからの日々を静かに整える手がかりとなりますように。")
+    if not closing_text:
+        add_section("結び", "ここに記した見返しの言葉が、これからの日々を静かに整える手がかりとなりますように。")
 
     c.setFont(font_name, 10)
     c.setFillColor(HexColor("#000000"))

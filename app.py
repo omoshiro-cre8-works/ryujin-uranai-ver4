@@ -1423,67 +1423,74 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             for point in (raw_review_summary_points if isinstance(raw_review_summary_points, list) else [])
             if str(point).strip()
         ]
-        if review_summary_points:
-            render_html_box("今回の見返しポイント", "\n".join(f"・{point}" for point in review_summary_points))
+        summary_text = "\n".join(f"・{point}" for point in review_summary_points)
 
-        review_fortune_sections = [
-            ("はじめに", "intro"),
-            ("前回のお告げから続いている流れ", "continuing_flow"),
-            (current_changes_title, "current_changes"),
-            ("今回のテーマについての見返し", "theme_review"),
-            ("これから3カ月ほど意識したいこと", "next_3_months"),
-            ("1年先に向けて整えていくこと", "one_year_guidance"),
-            ("龍神さまからの見返しの言葉", "ryujin_message"),
-            ("巫女の助言", "miko_advice"),
-            ("心に留めること", "things_to_remember"),
-        ]
-        for index, (title, key) in enumerate(review_fortune_sections):
-            render_html_box(title, str(review_fortune.get(key) or ""))
-            if index == 0:
-                comparison_blocks = review_fortune.get("comparison_blocks") or []
-                comparison_text_blocks = []
-                if isinstance(comparison_blocks, list):
-                    for block in comparison_blocks:
-                        if not isinstance(block, dict):
-                            continue
-                        theme = str(block.get("theme") or "見返しテーマ").strip()
-                        previous_message = str(block.get("previous_message") or "").strip()
-                        current_status = str(block.get("current_status") or "").strip()
-                        reinterpretation = str(block.get("reinterpretation") or "").strip()
-                        if not any([theme, previous_message, current_status, reinterpretation]):
-                            continue
-                        comparison_text_blocks.append(
-                            "\n".join(
-                                [
-                                    f"■ {theme}",
-                                    "前回のお告げ：",
-                                    previous_message,
-                                    "現在の状況：",
-                                    current_status,
-                                    "今回の読み直し：",
-                                    reinterpretation,
-                                ]
-                            )
-                        )
-                if comparison_text_blocks:
-                    render_html_box("前回のお告げと現在の照らし合わせ", "\n\n".join(comparison_text_blocks))
-            if key == "theme_review":
-                raw_action_items = review_fortune.get("next_3_month_action_items")
-                action_items = [
-                    str(item).strip()
-                    for item in (raw_action_items if isinstance(raw_action_items, list) else [])
-                    if str(item).strip()
-                ]
-                if action_items:
-                    action_text = "\n".join(
+        comparison_blocks = review_fortune.get("comparison_blocks") or []
+        comparison_text_blocks = []
+        if isinstance(comparison_blocks, list):
+            for block in comparison_blocks:
+                if not isinstance(block, dict):
+                    continue
+                theme = str(block.get("theme") or "見返しテーマ").strip()
+                previous_message = str(block.get("previous_message") or "").strip()
+                current_status = str(block.get("current_status") or "").strip()
+                reinterpretation = str(block.get("reinterpretation") or "").strip()
+                if not any([theme, previous_message, current_status, reinterpretation]):
+                    continue
+                comparison_text_blocks.append(
+                    "\n".join(
                         [
-                            "これから3カ月は、以下のような小さな行動を意識するとよさそうです。",
-                            "",
-                            *[f"・{item}" for item in action_items],
+                            f"■ {theme}",
+                            "前回のお告げ：",
+                            previous_message,
+                            "現在の状況：",
+                            current_status,
+                            "今回の読み直し：",
+                            reinterpretation,
                         ]
                     )
-                    render_html_box("これから3カ月の小さな行動", action_text)
+                )
+        comparison_text = "\n\n".join(comparison_text_blocks)
 
+        raw_action_items = review_fortune.get("next_3_month_action_items")
+        action_items = [
+            str(item).strip()
+            for item in (raw_action_items if isinstance(raw_action_items, list) else [])
+            if str(item).strip()
+        ]
+        action_text = "\n".join(
+            [
+                "これから3カ月は、以下のような小さな行動を意識するとよさそうです。",
+                "",
+                *[f"・{item}" for item in action_items],
+            ]
+        ) if action_items else ""
+
+        def join_review_parts(parts):
+            return "\n\n".join(part for part in (str(value or "").strip() for value in parts) if part)
+
+        review_fortune_sections = [
+            ("前回のお告げの振り返り", join_review_parts([summary_text, review_fortune.get("intro")])),
+            (
+                "前回のお告げと現在の状況との照らし合わせ",
+                join_review_parts([
+                    comparison_text,
+                    review_fortune.get("continuing_flow"),
+                    review_fortune.get("current_changes"),
+                    review_fortune.get("theme_review"),
+                ]),
+            ),
+            (
+                "これから3カ月ほど意識したいことや小さな行動",
+                join_review_parts([review_fortune.get("next_3_months"), action_text]),
+            ),
+            ("1年先に向けて整えていくこと", review_fortune.get("one_year_guidance")),
+            ("龍神さまからの見返しのことば", review_fortune.get("ryujin_message")),
+            ("巫女の助言", review_fortune.get("miko_advice")),
+            ("結び", review_fortune.get("things_to_remember")),
+        ]
+        for title, text in review_fortune_sections:
+            render_html_box(title, str(text or ""))
         review_pdf_bytes = st.session_state.get("review_pdf_bytes")
         review_pdf_purchase_id = st.session_state.get("review_pdf_generated_purchase_id")
         if review_pdf_bytes and review_pdf_purchase_id == purchase_id:
