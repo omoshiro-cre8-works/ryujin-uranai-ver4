@@ -1424,7 +1424,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 reinterpretation = str(block.get("reinterpretation") or "").strip()
                 if not any([theme, previous_message, current_status, reinterpretation]):
                     continue
-                comparison_body = " ".join(
+                comparison_body = "\n".join(
                     part for part in [previous_message, current_status, reinterpretation] if part
                 )
                 comparison_text_blocks.append(

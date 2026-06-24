@@ -269,7 +269,7 @@ def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
             block["current_status"],
             block["reinterpretation"],
         ]
-        body = " ".join(part for part in body_parts if part)
+        body = "\n".join(part for part in body_parts if part)
         formatted_blocks.append("\n".join(part for part in [f"■ {theme}", body] if part))
     return "\n\n".join(formatted_blocks)
 

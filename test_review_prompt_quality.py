@@ -117,10 +117,12 @@ def test_review_prompt_asks_to_merge_alignment_blocks_without_repeated_labels():
     )
 
     assert "本文では毎回ラベル分けせず" in prompt
-    assert "1つの短い文章ブロックに統合" in prompt
+    assert "短い導入・要点・まとめ" in prompt
     assert "同じ事実を章ごとに繰り返さず" in prompt
     assert "3章は具体的な行動に集中する" in prompt
     assert "巫女の助言」では同じ行動リストを繰り返さず" in prompt
+    assert "単なるメモの羅列にしない" in prompt
+    assert "手相だけを独立した説明にせず" in prompt
 
 
 def test_review_pdf_comparison_blocks_render_without_repeated_labels():
@@ -141,6 +143,7 @@ def test_review_pdf_comparison_blocks_render_without_repeated_labels():
     assert "前回のお告げ：" not in text
     assert "現在の状況：" not in text
     assert "今回の読み直し：" not in text
+    assert "前回は準備の流れが示されていました。\n現在は販売後の改善点" in text
 
 
 def test_review_prompt_forbids_current_palm_reading_without_image():
