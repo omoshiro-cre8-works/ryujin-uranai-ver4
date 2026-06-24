@@ -1,6 +1,7 @@
 import json
 
 from services import fortune_service
+from services import pdf_service
 
 
 def make_review_context(palm_image_count):
@@ -55,6 +56,7 @@ def test_review_prompt_declares_information_boundary_and_review_structure():
     assert "最重要情報" in prompt
     assert "相談者が選んだ「今回とくに見返したいテーマ」" in prompt
     assert "見返し便としての7章構成" in prompt
+    assert "「前回のお告げ：」「現在の状況：」「今回の読み直し：」というラベル" in prompt
 
 
 def test_review_prompt_prioritizes_theme_and_supplemental_context():
@@ -67,6 +69,7 @@ def test_review_prompt_prioritizes_theme_and_supplemental_context():
     assert "今回何を見返したいのかを中心" in prompt
     assert "current_private_inputs の review_memo" in prompt
     assert "相談テーマと補足情報から外れた一般論を広げず" in prompt
+    assert "近況メモに出てくる具体情報は、必要な箇所で一度整理すれば十分" in prompt
 
 
 def test_review_prompt_strengthens_current_palm_section_when_image_exists():
@@ -79,6 +82,40 @@ def test_review_prompt_strengthens_current_palm_section_when_image_exists():
     assert "今回の画像から読み取れる範囲で印象に残る点" in prompt
     assert "近況メモと重なる読み" in prompt
     assert "これから3カ月の行動への手がかり" in prompt
+
+
+
+def test_review_prompt_asks_to_merge_alignment_blocks_without_repeated_labels():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {"user_name": "テスト", "review_memo": "近況"},
+    )
+
+    assert "本文では毎回ラベル分けせず" in prompt
+    assert "1つの短い文章ブロックに統合" in prompt
+    assert "同じ事実を章ごとに繰り返さず" in prompt
+    assert "3章は具体的な行動に集中する" in prompt
+    assert "巫女の助言」では同じ行動リストを繰り返さず" in prompt
+
+
+def test_review_pdf_comparison_blocks_render_without_repeated_labels():
+    text = pdf_service._format_comparison_blocks(
+        {
+            "comparison_blocks": [
+                {
+                    "theme": "準備から改善へ",
+                    "previous_message": "前回は準備の流れが示されていました。",
+                    "current_status": "現在は販売後の改善点が見えています。",
+                    "reinterpretation": "今は課題を絞る段階と見ることができます。",
+                }
+            ]
+        }
+    )
+
+    assert "■ 準備から改善へ" in text
+    assert "前回のお告げ：" not in text
+    assert "現在の状況：" not in text
+    assert "今回の読み直し：" not in text
 
 
 def test_review_prompt_forbids_current_palm_reading_without_image():

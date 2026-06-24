@@ -254,7 +254,7 @@ def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
         return ""
 
     formatted_blocks: list[str] = []
-    for raw_block in raw_blocks:
+    for raw_block in raw_blocks[:3]:
         if not isinstance(raw_block, dict):
             continue
         block = {
@@ -264,18 +264,13 @@ def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
         if not any(block.values()):
             continue
         theme = block["theme"] or "見返しテーマ"
-        parts = [
-            f"■ {theme}",
-            "前回のお告げ：",
+        body_parts = [
             block["previous_message"],
-            "",
-            "現在の状況：",
             block["current_status"],
-            "",
-            "今回の読み直し：",
             block["reinterpretation"],
         ]
-        formatted_blocks.append("\n".join(part for part in parts if part != ""))
+        body = "\n".join(part for part in body_parts if part)
+        formatted_blocks.append("\n".join(part for part in [f"■ {theme}", body] if part))
     return "\n\n".join(formatted_blocks)
 
 
@@ -301,10 +296,8 @@ def generate_review_fortune_pdf(
     def join_parts(parts: list[str]) -> str:
         return "\n\n".join(part for part in (p.strip() for p in parts) if part)
 
-    reflection_text = join_parts([
-        _format_review_summary_points(review_fortune),
-        str((review_fortune or {}).get("intro") or ""),
-    ])
+    intro_text = str((review_fortune or {}).get("intro") or "").strip()
+    reflection_text = intro_text or _format_review_summary_points(review_fortune)
     alignment_text = join_parts([
         _format_comparison_blocks(review_fortune),
         str((review_fortune or {}).get("continuing_flow") or ""),

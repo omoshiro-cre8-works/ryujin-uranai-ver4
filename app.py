@@ -1402,19 +1402,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     review_fortune = st.session_state.get("review_fortune")
     purchase_id = active_purchase.get("purchase_id")
     if review_fortune and st.session_state.get("review_fortune_purchase_id") == purchase_id:
-        stored_review_context = st.session_state.get("review_context") or {}
-        stored_current_inputs = (
-            (stored_review_context.get("review_context") or {}).get("current_inputs") or {}
-        )
-        try:
-            has_current_palm_images = int(stored_current_inputs.get("palm_image_count") or 0) > 0
-        except (TypeError, ValueError):
-            has_current_palm_images = False
-        current_changes_title = (
-            "現在の手相と近況から見える変化"
-            if has_current_palm_images
-            else "現在の近況から見える変化"
-        )
         render_form_gap(2)
         st.markdown('<div class="heading-lg">📜 見返し便の鑑定本文</div>', unsafe_allow_html=True)
         raw_review_summary_points = review_fortune.get("review_summary_points")
@@ -1428,7 +1415,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         comparison_blocks = review_fortune.get("comparison_blocks") or []
         comparison_text_blocks = []
         if isinstance(comparison_blocks, list):
-            for block in comparison_blocks:
+            for block in comparison_blocks[:3]:
                 if not isinstance(block, dict):
                     continue
                 theme = str(block.get("theme") or "見返しテーマ").strip()
@@ -1437,18 +1424,11 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 reinterpretation = str(block.get("reinterpretation") or "").strip()
                 if not any([theme, previous_message, current_status, reinterpretation]):
                     continue
+                comparison_body = "\n".join(
+                    part for part in [previous_message, current_status, reinterpretation] if part
+                )
                 comparison_text_blocks.append(
-                    "\n".join(
-                        [
-                            f"■ {theme}",
-                            "前回のお告げ：",
-                            previous_message,
-                            "現在の状況：",
-                            current_status,
-                            "今回の読み直し：",
-                            reinterpretation,
-                        ]
-                    )
+                    "\n".join(part for part in [f"■ {theme}", comparison_body] if part)
                 )
         comparison_text = "\n\n".join(comparison_text_blocks)
 
@@ -1470,7 +1450,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             return "\n\n".join(part for part in (str(value or "").strip() for value in parts) if part)
 
         review_fortune_sections = [
-            ("前回のお告げの振り返り", join_review_parts([summary_text, review_fortune.get("intro")])),
+            ("前回のお告げの振り返り", str(review_fortune.get("intro") or "").strip() or summary_text),
             (
                 "前回のお告げと現在の状況との照らし合わせ",
                 join_review_parts([
