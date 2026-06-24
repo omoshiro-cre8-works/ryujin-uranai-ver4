@@ -248,7 +248,56 @@ def _format_next_3_month_action_items(review_fortune: dict[str, Any]) -> str:
     return "\n".join([intro, "", *[f"・{item}" for item in items]])
 
 
-def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
+def _split_review_comparison_points(text: str, max_points: int = 3) -> list[str]:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+
+    raw_parts: list[str] = []
+    for line in normalized.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("・"):
+            raw_parts.append(line[1:].strip())
+            continue
+        sentences = re.findall(r"[^。！？!?]+[。！？!?]?", line)
+        if len(sentences) >= 2 and len(line) > 90:
+            raw_parts.extend(sentence.strip() for sentence in sentences if sentence.strip())
+        else:
+            raw_parts.append(line)
+
+    if len(raw_parts) <= max_points:
+        return [f"・{part}" for part in raw_parts if part]
+
+    kept = raw_parts[: max_points - 1]
+    kept.append("".join(raw_parts[max_points - 1 :]))
+    return [f"・{part}" for part in kept if part]
+
+
+def _format_review_comparison_block(raw_block: dict[str, Any]) -> str:
+    block = {
+        field: str(raw_block.get(field) or "").strip()
+        for field in REVIEW_FORTUNE_COMPARISON_FIELDS
+    }
+    if not any(block.values()):
+        return ""
+
+    sections = [
+        ("前回からの流れ", block["previous_message"]),
+        ("現在見えていること", block["current_status"]),
+        ("今回の読み直し", block["reinterpretation"]),
+    ]
+    parts = [f"■ {block['theme'] or '見返しテーマ'}"]
+    for label, value in sections:
+        points = _split_review_comparison_points(value)
+        if not points:
+            continue
+        parts.extend(["", label, *points])
+    return "\n".join(parts)
+
+
+def format_review_comparison_blocks(review_fortune: dict[str, Any]) -> str:
     raw_blocks = (review_fortune or {}).get("comparison_blocks")
     if not isinstance(raw_blocks, list):
         return ""
@@ -257,21 +306,14 @@ def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
     for raw_block in raw_blocks[:3]:
         if not isinstance(raw_block, dict):
             continue
-        block = {
-            field: str(raw_block.get(field) or "").strip()
-            for field in REVIEW_FORTUNE_COMPARISON_FIELDS
-        }
-        if not any(block.values()):
-            continue
-        theme = block["theme"] or "見返しテーマ"
-        body_parts = [
-            block["previous_message"],
-            block["current_status"],
-            block["reinterpretation"],
-        ]
-        body = "\n".join(part for part in body_parts if part)
-        formatted_blocks.append("\n".join(part for part in [f"■ {theme}", body] if part))
+        formatted_block = _format_review_comparison_block(raw_block)
+        if formatted_block:
+            formatted_blocks.append(formatted_block)
     return "\n\n".join(formatted_blocks)
+
+
+def _format_comparison_blocks(review_fortune: dict[str, Any]) -> str:
+    return format_review_comparison_blocks(review_fortune)
 
 
 def _format_iso_date_japanese(value: str) -> str:

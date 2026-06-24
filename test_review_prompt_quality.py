@@ -127,14 +127,14 @@ def test_review_prompt_asks_to_merge_alignment_blocks_without_repeated_labels():
     assert "今回の主対象は2章である" in prompt
 
 
-def test_review_pdf_comparison_blocks_render_without_repeated_labels():
-    text = pdf_service._format_comparison_blocks(
+def test_review_comparison_blocks_render_with_helper_labels_without_old_labels():
+    text = pdf_service.format_review_comparison_blocks(
         {
             "comparison_blocks": [
                 {
                     "theme": "準備から改善へ",
                     "previous_message": "前回は準備の流れが示されていました。",
-                    "current_status": "・現在は販売後の改善点が見えています。今は導線を磨く段階と読めます。",
+                    "current_status": "現在は販売後の改善点が見えています。今は導線を磨く段階と読めます。購入前の不安を減らす視点が必要です。",
                     "reinterpretation": "今は課題を絞る段階と見ることができます。",
                 }
             ]
@@ -142,10 +142,14 @@ def test_review_pdf_comparison_blocks_render_without_repeated_labels():
     )
 
     assert "■ 準備から改善へ" in text
+    assert "前回からの流れ" in text
+    assert "現在見えていること" in text
+    assert "今回の読み直し" in text
     assert "前回のお告げ：" not in text
     assert "現在の状況：" not in text
     assert "今回の読み直し：" not in text
-    assert "前回は準備の流れが示されていました。\n・現在は販売後の改善点" in text
+    assert "前回からの流れ\n・前回は準備の流れが示されていました。" in text
+    assert "現在見えていること\n・現在は販売後の改善点" in text
 
 
 def test_review_prompt_forbids_current_palm_reading_without_image():

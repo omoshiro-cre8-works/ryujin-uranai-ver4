@@ -54,7 +54,11 @@ from services.fortune_service import (
     call_gemini_review_pdf_summary,
 )
 from services.ga4_service import send_ga4_event
-from services.pdf_service import generate_miko_letter_pdf, generate_review_fortune_pdf
+from services.pdf_service import (
+    format_review_comparison_blocks,
+    generate_miko_letter_pdf,
+    generate_review_fortune_pdf,
+)
 from services.validation_service import (
     format_birth_time_text,
     normalize_text,
@@ -1412,25 +1416,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         ]
         summary_text = "\n".join(f"・{point}" for point in review_summary_points)
 
-        comparison_blocks = review_fortune.get("comparison_blocks") or []
-        comparison_text_blocks = []
-        if isinstance(comparison_blocks, list):
-            for block in comparison_blocks[:3]:
-                if not isinstance(block, dict):
-                    continue
-                theme = str(block.get("theme") or "見返しテーマ").strip()
-                previous_message = str(block.get("previous_message") or "").strip()
-                current_status = str(block.get("current_status") or "").strip()
-                reinterpretation = str(block.get("reinterpretation") or "").strip()
-                if not any([theme, previous_message, current_status, reinterpretation]):
-                    continue
-                comparison_body = "\n".join(
-                    part for part in [previous_message, current_status, reinterpretation] if part
-                )
-                comparison_text_blocks.append(
-                    "\n".join(part for part in [f"■ {theme}", comparison_body] if part)
-                )
-        comparison_text = "\n\n".join(comparison_text_blocks)
+        comparison_text = format_review_comparison_blocks(review_fortune)
 
         raw_action_items = review_fortune.get("next_3_month_action_items")
         action_items = [
