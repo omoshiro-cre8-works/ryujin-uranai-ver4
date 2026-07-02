@@ -788,7 +788,8 @@ def get_current_purchase_record() -> dict[str, Any] | None:
 
 
 def clean_purchase_query_params() -> None:
-    removable_keys = {"session_id", "purchase_id", "access_token", "product_type"}
+    # Keep purchase_id/access_token/product_type so a paid, unused purchase can be restored after reloads.
+    removable_keys = {"session_id"}
     remaining_params: dict[str, str] = {}
     for key in st.query_params:
         if key in removable_keys:
