@@ -81,6 +81,8 @@ WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
     "https://www.omoshiro-cre8works.com/ai-uranai",
 )
+REGULAR_TOP_URL = os.getenv("REGULAR_TOP_URL", WIX_CANCEL_URL).strip() or WIX_CANCEL_URL
+REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", REGULAR_TOP_URL).strip() or REGULAR_TOP_URL
 
 
 def get_int_env(key: str, default: int) -> int:
@@ -109,6 +111,14 @@ PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 ASSETS_DIR = BASE_DIR / "assets"
+REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
+    "REGULAR_COMPLETION_ILLUSTRATION",
+    str(ASSETS_DIR / "regular_completion_illustration.png"),
+).strip()
+REVIEW_COMPLETION_ILLUSTRATION = os.getenv(
+    "REVIEW_COMPLETION_ILLUSTRATION",
+    str(ASSETS_DIR / "review_completion_illustration.png"),
+).strip()
 SAMPLE_PDF_IMAGE_PATHS = [
     ASSETS_DIR / "sample_pdf_1.png",
     ASSETS_DIR / "sample_pdf_2.png",
@@ -1025,8 +1035,78 @@ def render_payment_section(
 
 
 
-def render_completion_screen() -> None:
-    top_url = WIX_CANCEL_URL or "https://www.omoshiro-cre8works.com/ai-uranai"
+def get_completion_screen_content(product_type: str) -> dict[str, str]:
+    product_type = normalize_product_type(product_type)
+    if product_type == PRODUCT_TYPE_REVIEW:
+        return {
+            "heading": "見返し便のお告げは完了しました",
+            "thanks_body": (
+                "ご利用ありがとうございました。\n\n"
+                "今回の見返し便PDFも、あとから読み返せるように保存しておくことをおすすめします。\n"
+                "この画面を閉じる前に、PDFの保存をご確認ください。"
+            ),
+            "guide_heading": "前回と今回のお告げを、これからの流れに活かしたい方へ",
+            "guide_body": (
+                "前回のお告げと今回のお告げを見比べることで、\n"
+                "今の流れや、少しずつ変わってきたことに気づきやすくなります。\n\n"
+                "また季節が変わったときや、\n"
+                "気持ちや状況に変化があったときには、\n"
+                "今回のPDFをもとに、あらためて見返し便をご利用いただけます。"
+            ),
+            "primary_label": "見返し便ページに戻る",
+            "primary_url": REVIEW_LP_URL,
+            "secondary_label": "『龍神さまのお告げ』トップに戻る",
+            "secondary_url": REGULAR_TOP_URL,
+            "illustration_path": REVIEW_COMPLETION_ILLUSTRATION,
+            "illustration_alt": "巫女がPDFを両手に持っているイラスト",
+        }
+
+    return {
+        "heading": "龍神さまのお告げは完了しました",
+        "thanks_body": (
+            "ご利用ありがとうございました。\n\n"
+            "お告げPDFは、あとから見返せるように保存しておくことをおすすめします。\n"
+            "この画面を閉じる前に、PDFの保存をご確認ください。"
+        ),
+        "guide_heading": "今回のお告げを、あとで見返したい方へ",
+        "guide_body": (
+            "今回のお告げは、今のあなたに向けたひとつの道しるべです。\n\n"
+            "少し時間をおいて読み返すことで、\n"
+            "今の気持ちや状況と重なって、また違った気づきが見えてくることもあります。\n\n"
+            "『龍神さまのお告げ 見返し便』では、\n"
+            "今回の鑑定PDFをもとに、現在の手相や近況をあわせて、\n"
+            "今のあなたに向けたお告げをもう一度お届けします。"
+        ),
+        "primary_label": "見返し便について見る",
+        "primary_url": REVIEW_LP_URL,
+        "secondary_label": "『龍神さまのお告げ』トップに戻る",
+        "secondary_url": REGULAR_TOP_URL,
+        "illustration_path": REGULAR_COMPLETION_ILLUSTRATION,
+        "illustration_alt": "巫女がPDFを読んで見返しているイラスト",
+    }
+
+
+def render_completion_auxiliary_illustration(content: dict[str, str]) -> None:
+    illustration_path = (content.get("illustration_path") or "").strip()
+    if not illustration_path:
+        return
+
+    illustration_bytes = read_image_bytes(illustration_path)
+    if not illustration_bytes:
+        return
+
+    render_form_gap(1)
+    left, center, right = st.columns([1, 1.8, 1])
+    with center:
+        render_inline_png(
+            illustration_bytes,
+            alt=content.get("illustration_alt") or "完了画面補助イラスト",
+            width=280,
+        )
+
+
+def render_completion_screen(product_type: str | None = None) -> None:
+    content = get_completion_screen_content(normalize_product_type(product_type))
     render_form_gap(2)
     left, center, right = st.columns([1, 1.4, 1])
     with center:
@@ -1034,26 +1114,50 @@ def render_completion_screen() -> None:
         if miko_image_bytes:
             render_inline_png(miko_image_bytes, alt="巫女画像")
 
+    thanks_html = "<br>".join(html.escape(line) for line in content["thanks_body"].split("\n"))
+    guide_body_html = "<br>".join(html.escape(line) for line in content["guide_body"].split("\n"))
+
     st.markdown(
-        """
-        <h2 style="text-align:center; color:#8B4513; margin-top:0.8rem;">
-            龍神さまのお告げは完了しました
+        f"""
+        <h2 style="text-align:center; color:#8B4513; margin-top:0.8rem; line-height:1.55;">
+            {html.escape(content["heading"])}
         </h2>
         <p style="text-align:center; line-height:1.9; margin-top:0.6rem;">
-            ご利用ありがとうございました。<br>
-            また鑑定をご希望の場合は、あらためて決済のうえ、ご利用をお願いします。
+            {thanks_html}
         </p>
         """,
         unsafe_allow_html=True,
     )
 
+    render_completion_auxiliary_illustration(content)
+
     st.markdown(
         f"""
-        <div style="text-align:center; margin-top:1.5rem;">
-            <a href="{html.escape(top_url, quote=True)}" target="_self"
-               style="display:inline-block; background:#b6552d; color:white; padding:0.8rem 1.4rem;
-                      border-radius:999px; text-decoration:none; font-weight:600;">
-                『龍神さまのお告げ』トップに戻る
+        <div class="result-box" style="margin-top:1.1rem;">
+            <div class="result-title">{html.escape(content["guide_heading"])}</div>
+            <div class="result-body">{guide_body_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    primary_url = html.escape(content["primary_url"] or REGULAR_TOP_URL, quote=True)
+    secondary_url = html.escape(content["secondary_url"] or REGULAR_TOP_URL, quote=True)
+    st.markdown(
+        f"""
+        <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; margin-top:1.35rem;">
+            <a href="{primary_url}" target="_self"
+               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
+                      background:#b6552d; color:white; padding:0.8rem 1.25rem;
+                      border-radius:999px; text-decoration:none; font-weight:700; line-height:1.5;">
+                {html.escape(content["primary_label"])}
+            </a>
+            <a href="{secondary_url}" target="_self"
+               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
+                      background:#fff7f4; color:#8a3d24; padding:0.72rem 1.1rem;
+                      border:1px solid #d9b3a2; border-radius:999px; text-decoration:none;
+                      font-weight:700; line-height:1.5;">
+                {html.escape(content["secondary_label"])}
             </a>
         </div>
         """,
@@ -1792,7 +1896,7 @@ def main() -> None:
         return
 
     if active_purchase and active_purchase.get("used_flag"):
-        render_completion_screen()
+        render_completion_screen(get_purchase_product_type(active_purchase))
         st.stop()
 
     if active_purchase:
