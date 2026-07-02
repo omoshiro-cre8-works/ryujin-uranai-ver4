@@ -865,6 +865,12 @@ def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
             "\n決済完了後、入力フォームが表示されます。"
         )
     else:
+        st.markdown("## 龍神さまのお告げ")
+        st.markdown(
+            f"**ご利用料金：{active_amount_jpy}円（税込）**  "
+            "\n1回の購入につき、鑑定の実行は1回のみです。  "
+            "\n決済完了後、入力フォームが表示されます。"
+        )
         st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
 
     render_checkout_link(checkout_url, active_amount_jpy)
@@ -1188,7 +1194,7 @@ def render_completion_screen(product_type: str | None = None) -> None:
     st.markdown(
         f"""
         <div class="result-box" style="margin-top:1.1rem;">
-            <div class="result-title" style="font-size:1.15rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.75rem !important; line-height:1.6 !important;">{html.escape(content["guide_heading"])}</div>
+            <div class="result-title" style="font-size:1.24rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.8rem !important; line-height:1.6 !important;">{html.escape(content["guide_heading"])}</div>
             <div class="result-body">{guide_body_html}</div>
         </div>
         """,
