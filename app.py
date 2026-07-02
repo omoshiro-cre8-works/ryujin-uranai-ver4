@@ -1134,7 +1134,7 @@ def render_completion_screen(product_type: str | None = None) -> None:
     st.markdown(
         f"""
         <div class="result-box" style="margin-top:1.1rem;">
-            <div class="result-title">{html.escape(content["guide_heading"])}</div>
+            <div class="result-title" style="font-size:1.12rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.6rem !important; line-height:1.55 !important;">{html.escape(content["guide_heading"])}</div>
             <div class="result-body">{guide_body_html}</div>
         </div>
         """,
@@ -1164,7 +1164,7 @@ def render_completion_screen(product_type: str | None = None) -> None:
         unsafe_allow_html=True,
     )
 
-def render_header() -> None:
+def render_header(title_top_gap_rem: float = 0.1) -> None:
     header_left, header_right = st.columns([1, 4])
     with header_left:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
@@ -1175,8 +1175,9 @@ def render_header() -> None:
             st.caption("miko画像なし")
 
     with header_right:
+        title_style = f"margin-top:{title_top_gap_rem:.2f}rem !important;"
         st.markdown(
-            f'<div class="title-main">{html.escape(APP_TITLE)}</div>',
+            f'<div class="title-main" style="{title_style}">{html.escape(APP_TITLE)}</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -1901,7 +1902,7 @@ def main() -> None:
 
     if active_purchase:
         if is_purchase_ready(active_purchase):
-            render_header()
+            render_header(title_top_gap_rem=0.65)
             if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
                 render_review_fortune_form(active_purchase, logger)
             else:
