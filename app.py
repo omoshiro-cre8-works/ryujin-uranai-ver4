@@ -1175,7 +1175,7 @@ def render_completion_screen(product_type: str | None = None) -> None:
             render_inline_png(miko_image_bytes, alt="巫女画像")
 
     thanks_html = "<br>".join(html.escape(line) for line in content["thanks_body"].split("\n"))
-    guide_body_html = "<br>".join(html.escape(line) for line in content["guide_body"].split("\n"))
+    guide_body_html = "<br>".join(html.escape(line.strip()) for line in content["guide_body"].split("\n"))
 
     st.markdown(
         f"""
@@ -1201,9 +1201,7 @@ def render_completion_screen(product_type: str | None = None) -> None:
                 {html.escape(content["guide_heading"])}
             </div>
             <div style="line-height:1.9; color:#2f2f2f; font-size:0.98rem;
-                        white-space:pre-wrap; font-weight:500;">
-                {guide_body_html}
-            </div>
+                        text-align:left; font-weight:500;">{guide_body_html}</div>
         </div>
         '''
     )
