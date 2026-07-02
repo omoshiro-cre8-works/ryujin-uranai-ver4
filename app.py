@@ -77,12 +77,18 @@ APP_BASE_URL = os.getenv(
     "APP_BASE_URL",
     "https://ai-uranai-h1-155905710900.asia-northeast2.run.app",
 ).rstrip("/")
+WIX_REGULAR_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai"
 WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
-    "https://www.omoshiro-cre8works.com/ai-uranai",
+    WIX_REGULAR_LP_URL,
 )
-REGULAR_TOP_URL = os.getenv("REGULAR_TOP_URL", WIX_CANCEL_URL).strip() or WIX_CANCEL_URL
-REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", REGULAR_TOP_URL).strip() or REGULAR_TOP_URL
+_CONFIGURED_REGULAR_TOP_URL = os.getenv("REGULAR_TOP_URL", "").strip()
+REGULAR_TOP_URL = (
+    _CONFIGURED_REGULAR_TOP_URL
+    if _CONFIGURED_REGULAR_TOP_URL and _CONFIGURED_REGULAR_TOP_URL.rstrip("/") != APP_BASE_URL
+    else WIX_REGULAR_LP_URL
+)
+REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", "").strip()
 
 
 def get_int_env(key: str, default: int) -> int:
@@ -1087,6 +1093,21 @@ def get_completion_screen_content(product_type: str) -> dict[str, str]:
     }
 
 
+def normalize_url_for_comparison(value: str | None) -> str:
+    return (value or "").strip().rstrip("/")
+
+
+def should_show_review_completion_cta(url: str | None) -> bool:
+    normalized_url = normalize_url_for_comparison(url)
+    if not normalized_url:
+        return False
+    blocked_urls = {
+        normalize_url_for_comparison(APP_BASE_URL),
+        normalize_url_for_comparison(REGULAR_TOP_URL),
+    }
+    return normalized_url not in blocked_urls
+
+
 def render_completion_auxiliary_illustration(content: dict[str, str]) -> None:
     illustration_path = (content.get("illustration_path") or "").strip()
     if not illustration_path:
@@ -1142,17 +1163,23 @@ def render_completion_screen(product_type: str | None = None) -> None:
         unsafe_allow_html=True,
     )
 
-    primary_url = html.escape(content["primary_url"] or REGULAR_TOP_URL, quote=True)
-    secondary_url = html.escape(content["secondary_url"] or REGULAR_TOP_URL, quote=True)
-    st.markdown(
-        f"""
-        <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; margin-top:1.35rem;">
+    primary_button_html = ""
+    if should_show_review_completion_cta(content.get("primary_url")):
+        primary_url = html.escape(content["primary_url"], quote=True)
+        primary_button_html = f"""
             <a href="{primary_url}" target="_self"
                style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
                       background:#b6552d; color:white; padding:0.8rem 1.25rem;
                       border-radius:999px; text-decoration:none; font-weight:700; line-height:1.5;">
                 {html.escape(content["primary_label"])}
             </a>
+        """
+
+    secondary_url = html.escape(content["secondary_url"] or REGULAR_TOP_URL, quote=True)
+    st.markdown(
+        f"""
+        <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; margin-top:1.35rem;">
+            {primary_button_html}
             <a href="{secondary_url}" target="_self"
                style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
                       background:#fff7f4; color:#8a3d24; padding:0.72rem 1.1rem;
@@ -1903,7 +1930,7 @@ def main() -> None:
 
     if active_purchase:
         if is_purchase_ready(active_purchase):
-            render_header(title_top_gap_rem=0.65)
+            render_header(title_top_gap_rem=1.35)
             if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
                 render_review_fortune_form(active_purchase, logger)
             else:
