@@ -1108,6 +1108,38 @@ def should_show_review_completion_cta(url: str | None) -> bool:
     return normalized_url not in blocked_urls
 
 
+def render_completion_link_button(
+    *,
+    label: str,
+    url: str,
+    primary: bool,
+    margin_top_rem: float,
+) -> None:
+    safe_url = html.escape(url, quote=True)
+    safe_label = html.escape(label)
+    if primary:
+        style = (
+            "background:#b6552d; color:white; padding:0.8rem 1.25rem; "
+            "border-radius:999px; text-decoration:none; font-weight:700; line-height:1.5;"
+        )
+    else:
+        style = (
+            "background:#fff7f4; color:#8a3d24; padding:0.72rem 1.1rem; "
+            "border:1px solid #d9b3a2; border-radius:999px; text-decoration:none; "
+            "font-weight:700; line-height:1.5;"
+        )
+    st.html(
+        f'''
+        <div style="text-align:center; margin-top:{margin_top_rem:.2f}rem;">
+            <a href="{safe_url}" target="_self"
+               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center; {style}">
+                {safe_label}
+            </a>
+        </div>
+        '''
+    )
+
+
 def render_completion_auxiliary_illustration(content: dict[str, str]) -> None:
     illustration_path = (content.get("illustration_path") or "").strip()
     if not illustration_path:
@@ -1156,43 +1188,36 @@ def render_completion_screen(product_type: str | None = None) -> None:
     st.markdown(
         f"""
         <div class="result-box" style="margin-top:1.1rem;">
-            <div class="result-title" style="font-size:1.12rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.6rem !important; line-height:1.55 !important;">{html.escape(content["guide_heading"])}</div>
+            <div class="result-title" style="font-size:1.15rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.75rem !important; line-height:1.6 !important;">{html.escape(content["guide_heading"])}</div>
             <div class="result-body">{guide_body_html}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    primary_button_html = ""
-    if should_show_review_completion_cta(content.get("primary_url")):
-        primary_url = html.escape(content["primary_url"], quote=True)
-        primary_button_html = f"""
-            <a href="{primary_url}" target="_self"
-               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
-                      background:#b6552d; color:white; padding:0.8rem 1.25rem;
-                      border-radius:999px; text-decoration:none; font-weight:700; line-height:1.5;">
-                {html.escape(content["primary_label"])}
-            </a>
-        """
+    has_primary_button = should_show_review_completion_cta(content.get("primary_url"))
+    if has_primary_button:
+        render_completion_link_button(
+            label=content["primary_label"],
+            url=content["primary_url"],
+            primary=True,
+            margin_top_rem=1.35,
+        )
 
-    secondary_url = html.escape(content["secondary_url"] or REGULAR_TOP_URL, quote=True)
-    st.markdown(
-        f"""
-        <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem; margin-top:1.35rem;">
-            {primary_button_html}
-            <a href="{secondary_url}" target="_self"
-               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center;
-                      background:#fff7f4; color:#8a3d24; padding:0.72rem 1.1rem;
-                      border:1px solid #d9b3a2; border-radius:999px; text-decoration:none;
-                      font-weight:700; line-height:1.5;">
-                {html.escape(content["secondary_label"])}
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_completion_link_button(
+        label=content["secondary_label"],
+        url=content["secondary_url"] or REGULAR_TOP_URL,
+        primary=False,
+        margin_top_rem=0.75 if has_primary_button else 1.35,
     )
 
-def render_header(title_top_gap_rem: float = 0.1) -> None:
+
+def render_header(title_top_gap_rem: float = 0.1, header_top_gap_rem: float = 0.0) -> None:
+    if header_top_gap_rem > 0:
+        st.markdown(
+            f'<div style="height:{header_top_gap_rem:.2f}rem"></div>',
+            unsafe_allow_html=True,
+        )
     header_left, header_right = st.columns([1, 4])
     with header_left:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
@@ -1930,7 +1955,7 @@ def main() -> None:
 
     if active_purchase:
         if is_purchase_ready(active_purchase):
-            render_header(title_top_gap_rem=1.35)
+            render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
             if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
                 render_review_fortune_form(active_purchase, logger)
             else:
