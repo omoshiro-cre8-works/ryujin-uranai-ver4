@@ -1191,14 +1191,21 @@ def render_completion_screen(product_type: str | None = None) -> None:
 
     render_completion_auxiliary_illustration(content)
 
-    st.markdown(
-        f"""
-        <div class="result-box" style="margin-top:1.1rem;">
-            <div class="result-title" style="font-size:1.24rem !important; font-weight:700 !important; color:#8a3d24 !important; margin-bottom:0.8rem !important; line-height:1.6 !important;">{html.escape(content["guide_heading"])}</div>
-            <div class="result-body">{guide_body_html}</div>
+    st.html(
+        f'''
+        <div style="border:1px solid #ead5cb; border-radius:14px; padding:16px 18px;
+                    background:#fffdfa; margin-top:1.1rem; margin-bottom:0.9rem;
+                    box-shadow:0 1px 0 rgba(0, 0, 0, 0.02);">
+            <div style="font-size:1.35rem; font-weight:700; color:#8a3d24;
+                        margin-bottom:0.8rem; line-height:1.6;">
+                {html.escape(content["guide_heading"])}
+            </div>
+            <div style="line-height:1.9; color:#2f2f2f; font-size:0.98rem;
+                        white-space:pre-wrap; font-weight:500;">
+                {guide_body_html}
+            </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        '''
     )
 
     has_primary_button = should_show_review_completion_cta(content.get("primary_url"))
