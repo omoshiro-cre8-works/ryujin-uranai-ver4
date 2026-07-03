@@ -1366,6 +1366,11 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
     render_form_gap(2)
 
+    st.markdown('<div class="label-sm">出生地</div>', unsafe_allow_html=True)
+    review_birth_place = st.text_input("出生地", placeholder="東京都", key="review_birth_place")
+
+    render_form_gap(2)
+
     st.markdown('<div class="label-sm">現在の手相画像</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="input-help">現在の手相画像をアップロードしてください。前回からの変化を見るため、できるだけ最近撮影した画像をお使いください。画像は最大{MAX_IMAGE_FILES}枚までです。</div>',
@@ -1426,6 +1431,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         errors = validate_review_inputs(
             user_name=user_name,
             birth_date_selected=birth_date is not None,
+            birth_place=review_birth_place,
             review_theme=review_theme,
             uploaded_pdf=uploaded_pdf,
             uploaded_files=uploaded_files or [],
@@ -1465,19 +1471,30 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
             palm_image_count = len(uploaded_files or [])
             current_inputs = {
+                "birth_place": normalize_text(review_birth_place),
+                "birth_time_accuracy": review_birth_time_accuracy,
                 "birth_time_text": review_birth_time_text,
                 "selected_theme": review_theme,
+                "review_theme": review_theme,
                 "review_memo_present": bool(normalize_text(review_memo)),
                 "palm_image_count": palm_image_count,
             }
             current_private_inputs = {
                 "user_name": normalize_text(user_name),
                 "birth_date": birth_date.isoformat() if birth_date else "",
+                "birth_place": normalize_text(review_birth_place),
+                "birth_time_accuracy": review_birth_time_accuracy,
                 "birth_time_text": review_birth_time_text,
                 "selected_theme": review_theme,
+                "review_theme": review_theme,
                 "review_memo": normalize_text(review_memo),
+                "recent_note": normalize_text(review_memo),
                 "palm_image_count": palm_image_count,
                 "current_palm_image_status": "attached" if palm_image_count > 0 else "not_attached",
+                "palm_image_information": {
+                    "image_count": palm_image_count,
+                    "status": "attached" if palm_image_count > 0 else "not_attached",
+                },
             }
             purchase_id = str(active_purchase.get("purchase_id") or "")
             try:

@@ -56,6 +56,7 @@ def validate_review_pdf_content(uploaded_pdf_bytes: bytes) -> dict[str, Any]:
 def validate_review_inputs(
     user_name: str,
     birth_date_selected: bool,
+    birth_place: str,
     review_theme: str,
     uploaded_pdf: Any | None,
     uploaded_files: list[Any],
@@ -64,12 +65,17 @@ def validate_review_inputs(
 ) -> list[str]:
     errors: list[str] = []
     normalized_name = normalize_text(user_name)
+    normalized_birth_place = normalize_text(birth_place)
     normalized_memo = normalize_text(review_memo)
 
     if not normalized_name:
         errors.append('お名前をご入力ください。')
     if len(normalized_name) > 60:
         errors.append('お名前は60文字以内でご入力ください。')
+    if not normalized_birth_place:
+        errors.append('出生地をご入力ください。')
+    if len(normalized_birth_place) > 100:
+        errors.append('出生地は100文字以内でご入力ください。')
     if not birth_date_selected:
         errors.append('生年月日を選択してください。')
     if not normalize_text(review_theme):

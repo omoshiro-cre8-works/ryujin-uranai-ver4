@@ -453,7 +453,8 @@ current_private_inputs:
 
 最重要情報:
 - 相談者が選んだ「今回とくに見返したいテーマ」
-- current_private_inputs の review_memo に含まれる、特に重視したいこと・現在の近況
+- current_private_inputs の review_memo / recent_note に含まれる、特に重視したいこと・現在の近況
+- current_private_inputs の birth_place / birth_time_accuracy / birth_time_text。四柱推命・西洋占星術の土台として通常版と同等に扱う
 - 前回鑑定PDFの内容
 - 今回アップロードされた手相画像（添付がある場合のみ）
 
@@ -528,7 +529,9 @@ current_private_inputs:
 - 現在の手相画像が添付されている場合のみ、画像から読み取れる今回時点の手がかり。
 - 現在の手相画像が添付されていない場合は、手相からの新たな読み取りは行わず、前回鑑定に記された手相の傾向と現在の近況メモを中心に見返すこと。
 - 今回とくに見返したいテーマ。これは鑑定全体の最重要軸として扱う。
-- current_private_inputs の review_memo に書かれた補足情報と現在の近況。これは相談テーマを具体化する最重要情報として扱う。
+- current_private_inputs の review_memo / recent_note に書かれた補足情報と現在の近況。これは相談テーマを具体化する最重要情報として扱う。
+- current_private_inputs の user_name、birth_date、birth_place、birth_time_accuracy、birth_time_text を、姓名判断・四柱推命・西洋占星術の現在入力情報として確認する。
+- 出生地と出生時刻精度は占術上の土台として反映するが、鑑定全体を出生情報や専門用語だけに偏らせず、前回PDF、見返しテーマ、近況メモ、現在の手相画像との照合に統合する。
 - 近況メモに書かれた本人の現実感。
 - review_summary_points は3項目程度。1章の振り返りを補助する短い要点にし、intro と同じ内容を言い換えて繰り返さない。
 - comparison_blocks は2〜3項目程度。テーマは近況メモと見返しテーマに応じて選び、「前回のお告げ」「現在の状況」「今回の読み直し」をラベルとして分割しない。各ブロックは、短い導入文、腹落ちする要点3〜4個、短い読み直しのまとめで構成する。当たった・外れたの判定はしない。
@@ -1189,8 +1192,11 @@ def build_review_context(
         'months_since_previous_reading': pdf_analysis.get('months_since_previous_reading'),
     }
     safe_current_inputs = {
+        'birth_place': str(current_inputs.get('birth_place') or ''),
+        'birth_time_accuracy': str(current_inputs.get('birth_time_accuracy') or ''),
         'birth_time_text': str(current_inputs.get('birth_time_text') or ''),
         'selected_theme': str(current_inputs.get('selected_theme') or ''),
+        'review_theme': str(current_inputs.get('review_theme') or current_inputs.get('selected_theme') or ''),
         'review_memo_present': bool(current_inputs.get('review_memo_present')),
         'palm_image_count': int(current_inputs.get('palm_image_count') or 0),
     }

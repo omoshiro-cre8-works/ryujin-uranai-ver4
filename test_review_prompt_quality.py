@@ -20,12 +20,63 @@ def make_review_context(palm_image_count):
                 "recent_3_months_status": "past",
             },
             "current_inputs": {
+                "birth_place": "東京都",
+                "birth_time_accuracy": "正確に分かる",
+                "birth_time_text": "12:00",
                 "selected_theme": "仕事運",
+                "review_theme": "仕事運",
                 "review_memo_present": True,
                 "palm_image_count": palm_image_count,
             },
         }
     }
+
+
+def test_review_context_keeps_birth_place_and_birth_time_accuracy():
+    context = fortune_service.build_review_context(
+        pdf_analysis={"previous_reading_date": "2026-01-01"},
+        previous_summary={},
+        current_inputs={
+            "birth_place": "東京都",
+            "birth_time_accuracy": "だいたい分かる",
+            "birth_time_text": "だいたい 12:00 頃",
+            "selected_theme": "仕事運",
+            "review_theme": "仕事運",
+            "review_memo_present": True,
+            "palm_image_count": 1,
+        },
+    )
+
+    current_inputs = context["review_context"]["current_inputs"]
+    assert current_inputs["birth_place"] == "東京都"
+    assert current_inputs["birth_time_accuracy"] == "だいたい分かる"
+    assert current_inputs["birth_time_text"] == "だいたい 12:00 頃"
+    assert current_inputs["review_theme"] == "仕事運"
+
+
+def test_review_prompt_includes_current_birth_inputs_without_weakening_review_focus():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {
+            "user_name": "テスト",
+            "birth_date": "1990-01-01",
+            "birth_place": "東京都",
+            "birth_time_accuracy": "正確に分かる",
+            "birth_time_text": "12:00",
+            "review_theme": "仕事運",
+            "recent_note": "仕事の方向性を見返したい",
+            "palm_image_information": {"image_count": 1, "status": "attached"},
+        },
+    )
+
+    assert '"birth_place": "東京都"' in prompt
+    assert '"birth_time_accuracy": "正確に分かる"' in prompt
+    assert '"birth_time_text": "12:00"' in prompt
+    assert '"review_theme": "仕事運"' in prompt
+    assert '"recent_note": "仕事の方向性を見返したい"' in prompt
+    assert "四柱推命・西洋占星術の土台として通常版と同等に扱う" in prompt
+    assert "鑑定全体を出生情報や専門用語だけに偏らせず" in prompt
+    assert "前回PDF、見返しテーマ、近況メモ、現在の手相画像との照合" in prompt
 
 
 def test_review_pdf_summary_prompt_limits_previous_palm_to_pdf_text():
