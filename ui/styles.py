@@ -379,6 +379,21 @@ def render_app_css() -> None:
             margin-bottom: 0.15rem;
         }
 
+
+        /* ===== 完了画面 ===== */
+        .completion-miko-figure {
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .completion-miko-figure img {
+            width: min(100%, 240px);
+            max-height: 260px;
+            height: auto;
+            object-fit: contain;
+            display: block;
+            margin: 0 auto;
+        }
         /* ===== スマホだけさらに下げる ===== */
         @media (max-width: 640px) {
             [data-testid="stMainBlockContainer"] {
@@ -406,6 +421,11 @@ def render_app_css() -> None:
                 padding: 14px 14px;
             }
 
+
+            .completion-miko-figure img {
+                width: min(46vw, 150px);
+                max-height: 150px;
+            }
             .stMarkdown .result-box .result-body,
             .result-box .result-body {
                 font-size: 0.95rem !important;

@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -77,10 +78,20 @@ APP_BASE_URL = os.getenv(
     "APP_BASE_URL",
     "https://ai-uranai-h1-155905710900.asia-northeast2.run.app",
 ).rstrip("/")
+WIX_REGULAR_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai"
+WIX_SITE_TOP_URL = "https://www.omoshiro-cre8works.com/"
+WIX_REVIEW_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai/mikaeshibin"
 WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
-    "https://www.omoshiro-cre8works.com/ai-uranai",
+    WIX_REGULAR_LP_URL,
 )
+_CONFIGURED_REGULAR_TOP_URL = os.getenv("REGULAR_TOP_URL", "").strip()
+REGULAR_TOP_URL = (
+    _CONFIGURED_REGULAR_TOP_URL
+    if _CONFIGURED_REGULAR_TOP_URL and _CONFIGURED_REGULAR_TOP_URL.rstrip("/") != APP_BASE_URL
+    else WIX_REGULAR_LP_URL
+)
+REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", WIX_REVIEW_LP_URL).strip() or WIX_REVIEW_LP_URL
 
 
 def get_int_env(key: str, default: int) -> int:
@@ -109,6 +120,14 @@ PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 ASSETS_DIR = BASE_DIR / "assets"
+REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
+    "REGULAR_COMPLETION_ILLUSTRATION",
+    str(ASSETS_DIR / "miko_pdf.png"),
+).strip()
+REVIEW_COMPLETION_ILLUSTRATION = os.getenv(
+    "REVIEW_COMPLETION_ILLUSTRATION",
+    str(ASSETS_DIR / "nico_pdf.png"),
+).strip()
 SAMPLE_PDF_IMAGE_PATHS = [
     ASSETS_DIR / "sample_pdf_1.png",
     ASSETS_DIR / "sample_pdf_2.png",
@@ -153,6 +172,58 @@ def render_inline_png(
                 style="{width_style} max-width:100%; height:auto; display:block; margin:0 auto;"
             >
             {caption_html}
+        </figure>
+        '''
+    )
+
+
+def scroll_completion_screen_to_top() -> None:
+    components.html(
+        '''
+        <script>
+        const scrollCompletionToTop = () => {
+            try {
+                const parentDocument = window.parent.document;
+                const scrollTargets = [
+                    window.parent,
+                    parentDocument.documentElement,
+                    parentDocument.body,
+                    parentDocument.querySelector('[data-testid="stAppViewContainer"]'),
+                    parentDocument.querySelector('[data-testid="stMain"]')
+                ];
+                scrollTargets.forEach((target) => {
+                    if (!target) return;
+                    if (typeof target.scrollTo === 'function') {
+                        target.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+                    } else {
+                        target.scrollTop = 0;
+                        target.scrollLeft = 0;
+                    }
+                });
+            } catch (error) {
+                window.parent.scrollTo(0, 0);
+            }
+        };
+        scrollCompletionToTop();
+        window.requestAnimationFrame(scrollCompletionToTop);
+        window.setTimeout(scrollCompletionToTop, 80);
+        window.setTimeout(scrollCompletionToTop, 300);
+        </script>
+        ''',
+        height=0,
+        width=0,
+    )
+
+
+def render_completion_miko_image(image_bytes: bytes) -> None:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    st.html(
+        f'''
+        <figure class="completion-miko-figure">
+            <img
+                src="data:image/png;base64,{encoded}"
+                alt="巫女画像"
+            >
         </figure>
         '''
     )
@@ -778,7 +849,8 @@ def get_current_purchase_record() -> dict[str, Any] | None:
 
 
 def clean_purchase_query_params() -> None:
-    removable_keys = {"session_id", "purchase_id", "access_token", "product_type"}
+    # Keep purchase_id/access_token/product_type so a paid, unused purchase can be restored after reloads.
+    removable_keys = {"session_id"}
     remaining_params: dict[str, str] = {}
     for key in st.query_params:
         if key in removable_keys:
@@ -848,6 +920,12 @@ def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
             "\n決済完了後、入力フォームが表示されます。"
         )
     else:
+        st.markdown("## 龍神さまのお告げ")
+        st.markdown(
+            f"**ご利用料金：{active_amount_jpy}円（税込）**  "
+            "\n1回の購入につき、鑑定の実行は1回のみです。  "
+            "\n決済完了後、入力フォームが表示されます。"
+        )
         st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
 
     render_checkout_link(checkout_url, active_amount_jpy)
@@ -1025,42 +1103,195 @@ def render_payment_section(
 
 
 
-def render_completion_screen() -> None:
-    top_url = WIX_CANCEL_URL or "https://www.omoshiro-cre8works.com/ai-uranai"
+def get_completion_screen_content(product_type: str) -> dict[str, str]:
+    product_type = normalize_product_type(product_type)
+    if product_type == PRODUCT_TYPE_REVIEW:
+        return {
+            "heading": "見返し便のお告げは完了しました",
+            "thanks_body": (
+                "ご利用ありがとうございました。\n\n"
+                "今回の見返し便PDFも、あとから読み返せるように保存しておくことをおすすめします。\n"
+                "この画面を閉じる前に、PDFの保存をご確認ください。"
+            ),
+            "guide_heading": "前回と今回のお告げを、これからの流れに活かしたい方へ",
+            "guide_body": (
+                "前回のお告げと今回のお告げを見比べることで、\n"
+                "今の流れや、少しずつ変わってきたことに気づきやすくなります。\n\n"
+                "また季節が変わったときや、\n"
+                "気持ちや状況に変化があったときには、\n"
+                "今回のPDFをもとに、あらためて見返し便をご利用いただけます。"
+            ),
+            "primary_label": "見返し便ページに戻る",
+            "primary_url": REVIEW_LP_URL,
+            "secondary_label": "OMOSHIRO CRE8 WORKS トップに戻る",
+            "secondary_url": WIX_SITE_TOP_URL,
+            "illustration_path": REVIEW_COMPLETION_ILLUSTRATION,
+            "illustration_alt": "NICOがお告げPDFを読んでいるイラスト",
+        }
+
+    return {
+        "heading": "龍神さまのお告げは完了しました",
+        "thanks_body": (
+            "ご利用ありがとうございました。\n\n"
+            "お告げPDFは、あとから見返せるように保存しておくことをおすすめします。\n"
+            "この画面を閉じる前に、PDFの保存をご確認ください。"
+        ),
+        "guide_heading": "龍神さまのお告げ『見返し便』のご紹介",
+        "guide_body": (
+            "今回のお告げを少し時間をおいて読み返すことで、\n"
+            "違った気づきが見えてくることもあります。\n\n"
+            "しばらく経ってから『見返し便』をご利用いただくことで、\n"
+            "そのときの手相や近況、お手元のお告げPDFをもとに、\n"
+            "前のお告げから流れがどのように変化してきたかを\n"
+            "あらためて見直すことができます。"
+        ),
+        "primary_label": "見返し便をくわしく見る",
+        "primary_url": REVIEW_LP_URL,
+        "secondary_label": "OMOSHIRO CRE8 WORKS トップに戻る",
+        "secondary_url": WIX_SITE_TOP_URL,
+        "illustration_path": REGULAR_COMPLETION_ILLUSTRATION,
+        "illustration_alt": "巫女が鑑定書を2つ持っているイラスト",
+    }
+
+
+def normalize_url_for_comparison(value: str | None) -> str:
+    return (value or "").strip().rstrip("/")
+
+
+def should_show_review_completion_cta(url: str | None) -> bool:
+    normalized_url = normalize_url_for_comparison(url)
+    if not normalized_url:
+        return False
+    blocked_urls = {
+        normalize_url_for_comparison(APP_BASE_URL),
+        normalize_url_for_comparison(REGULAR_TOP_URL),
+    }
+    return normalized_url not in blocked_urls
+
+
+def render_completion_link_button(
+    *,
+    label: str,
+    url: str,
+    primary: bool,
+    margin_top_rem: float,
+) -> None:
+    safe_url = html.escape(url, quote=True)
+    safe_label = html.escape(label)
+    if primary:
+        style = (
+            "background:#b6552d; color:white; padding:0.8rem 1.25rem; "
+            "border-radius:999px; text-decoration:none; font-weight:700; line-height:1.5;"
+        )
+    else:
+        style = (
+            "background:#fff7f4; color:#8a3d24; padding:0.72rem 1.1rem; "
+            "border:1px solid #d9b3a2; border-radius:999px; text-decoration:none; "
+            "font-weight:700; line-height:1.5;"
+        )
+    st.html(
+        f'''
+        <div style="text-align:center; margin-top:{margin_top_rem:.2f}rem;">
+            <a href="{safe_url}" target="_self"
+               style="display:inline-block; width:min(100%, 320px); box-sizing:border-box; text-align:center; {style}">
+                {safe_label}
+            </a>
+        </div>
+        '''
+    )
+
+
+def render_completion_guide_block(content: dict[str, str], guide_body_html: str) -> None:
+    illustration_path = (content.get("illustration_path") or "").strip()
+    illustration_html = ""
+    if illustration_path:
+        illustration_bytes = read_image_bytes(illustration_path)
+        if illustration_bytes:
+            encoded = base64.b64encode(illustration_bytes).decode("ascii")
+            safe_alt = html.escape(content.get("illustration_alt") or "完了画面補助イラスト", quote=True)
+            illustration_html = f'''
+            <figure style="flex:0 1 220px; min-width:160px; margin:0; text-align:center;">
+                <img
+                    src="data:image/png;base64,{encoded}"
+                    alt="{safe_alt}"
+                    style="width:min(100%, 220px); max-height:260px; height:auto; object-fit:contain; display:block; margin:0 auto;"
+                >
+            </figure>
+            '''
+
+    st.html(
+        f'''
+        <div style="border:1px solid #ead5cb; border-radius:14px; padding:16px 18px;
+                    background:#fffdfa; margin-top:1.1rem; margin-bottom:0.9rem;
+                    box-shadow:0 1px 0 rgba(0, 0, 0, 0.02);">
+            <div style="font-size:1.35rem; font-weight:700; color:#8a3d24;
+                        margin-bottom:0.8rem; line-height:1.6;">
+                {html.escape(content["guide_heading"])}
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between;
+                        gap:1.1rem 1.4rem; flex-wrap:wrap;">
+                <div style="line-height:1.9; color:#2f2f2f; font-size:0.98rem;
+                            text-align:left; font-weight:500; flex:1 1 250px; min-width:0;">
+                    {guide_body_html}
+                </div>
+                {illustration_html}
+            </div>
+        </div>
+        '''
+    )
+
+
+def render_completion_screen(product_type: str | None = None) -> None:
+    content = get_completion_screen_content(normalize_product_type(product_type))
+    scroll_completion_screen_to_top()
     render_form_gap(2)
     left, center, right = st.columns([1, 1.4, 1])
     with center:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
         if miko_image_bytes:
-            render_inline_png(miko_image_bytes, alt="巫女画像")
+            render_completion_miko_image(miko_image_bytes)
+
+    thanks_html = "<br>".join(html.escape(line) for line in content["thanks_body"].split("\n"))
+    guide_body_html = "<br>".join(html.escape(line.strip()) for line in content["guide_body"].split("\n"))
 
     st.markdown(
-        """
-        <h2 style="text-align:center; color:#8B4513; margin-top:0.8rem;">
-            龍神さまのお告げは完了しました
+        f"""
+        <h2 style="text-align:center; color:#8B4513; margin-top:0.8rem; line-height:1.55;">
+            {html.escape(content["heading"])}
         </h2>
         <p style="text-align:center; line-height:1.9; margin-top:0.6rem;">
-            ご利用ありがとうございました。<br>
-            また鑑定をご希望の場合は、あらためて決済のうえ、ご利用をお願いします。
+            {thanks_html}
         </p>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        f"""
-        <div style="text-align:center; margin-top:1.5rem;">
-            <a href="{html.escape(top_url, quote=True)}" target="_self"
-               style="display:inline-block; background:#b6552d; color:white; padding:0.8rem 1.4rem;
-                      border-radius:999px; text-decoration:none; font-weight:600;">
-                『龍神さまのお告げ』トップに戻る
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_completion_guide_block(content, guide_body_html)
+
+
+    has_primary_button = should_show_review_completion_cta(content.get("primary_url"))
+    if has_primary_button:
+        render_completion_link_button(
+            label=content["primary_label"],
+            url=content["primary_url"],
+            primary=True,
+            margin_top_rem=1.35,
+        )
+
+    render_completion_link_button(
+        label=content["secondary_label"],
+        url=content["secondary_url"] or REGULAR_TOP_URL,
+        primary=False,
+        margin_top_rem=0.75 if has_primary_button else 1.35,
     )
 
-def render_header() -> None:
+
+def render_header(title_top_gap_rem: float = 0.1, header_top_gap_rem: float = 0.0) -> None:
+    if header_top_gap_rem > 0:
+        st.markdown(
+            f'<div style="height:{header_top_gap_rem:.2f}rem"></div>',
+            unsafe_allow_html=True,
+        )
     header_left, header_right = st.columns([1, 4])
     with header_left:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
@@ -1071,8 +1302,9 @@ def render_header() -> None:
             st.caption("miko画像なし")
 
     with header_right:
+        title_style = f"margin-top:{title_top_gap_rem:.2f}rem !important;"
         st.markdown(
-            f'<div class="title-main">{html.escape(APP_TITLE)}</div>',
+            f'<div class="title-main" style="{title_style}">{html.escape(APP_TITLE)}</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -1197,6 +1429,11 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
     render_form_gap(2)
 
+    st.markdown('<div class="label-sm">出生地</div>', unsafe_allow_html=True)
+    review_birth_place = st.text_input("出生地", placeholder="東京都", key="review_birth_place")
+
+    render_form_gap(2)
+
     st.markdown('<div class="label-sm">現在の手相画像</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="input-help">現在の手相画像をアップロードしてください。前回からの変化を見るため、できるだけ最近撮影した画像をお使いください。画像は最大{MAX_IMAGE_FILES}枚までです。</div>',
@@ -1240,7 +1477,23 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
     render_form_gap(2)
 
-    if st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit"):
+    purchase_id = active_purchase.get("purchase_id")
+    review_fortune_generated = (
+        bool(st.session_state.get("review_fortune"))
+        and st.session_state.get("review_fortune_purchase_id") == purchase_id
+    )
+    review_pdf_generated = (
+        bool(st.session_state.get("review_pdf_bytes"))
+        and st.session_state.get("review_pdf_generated_purchase_id") == purchase_id
+    )
+    review_generation_completed = review_fortune_generated or review_pdf_generated
+    review_submit_placeholder = st.empty()
+    review_submit_clicked = False
+    if not review_generation_completed:
+        with review_submit_placeholder:
+            review_submit_clicked = st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit")
+
+    if review_submit_clicked:
         st.session_state.review_context = None
         st.session_state.review_fortune = None
         st.session_state.review_fortune_purchase_id = None
@@ -1257,6 +1510,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         errors = validate_review_inputs(
             user_name=user_name,
             birth_date_selected=birth_date is not None,
+            birth_place=review_birth_place,
             review_theme=review_theme,
             uploaded_pdf=uploaded_pdf,
             uploaded_files=uploaded_files or [],
@@ -1296,19 +1550,30 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
             palm_image_count = len(uploaded_files or [])
             current_inputs = {
+                "birth_place": normalize_text(review_birth_place),
+                "birth_time_accuracy": review_birth_time_accuracy,
                 "birth_time_text": review_birth_time_text,
                 "selected_theme": review_theme,
+                "review_theme": review_theme,
                 "review_memo_present": bool(normalize_text(review_memo)),
                 "palm_image_count": palm_image_count,
             }
             current_private_inputs = {
                 "user_name": normalize_text(user_name),
                 "birth_date": birth_date.isoformat() if birth_date else "",
+                "birth_place": normalize_text(review_birth_place),
+                "birth_time_accuracy": review_birth_time_accuracy,
                 "birth_time_text": review_birth_time_text,
                 "selected_theme": review_theme,
+                "review_theme": review_theme,
                 "review_memo": normalize_text(review_memo),
+                "recent_note": normalize_text(review_memo),
                 "palm_image_count": palm_image_count,
                 "current_palm_image_status": "attached" if palm_image_count > 0 else "not_attached",
+                "palm_image_information": {
+                    "image_count": palm_image_count,
+                    "status": "attached" if palm_image_count > 0 else "not_attached",
+                },
             }
             purchase_id = str(active_purchase.get("purchase_id") or "")
             try:
@@ -1375,6 +1640,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             st.session_state.review_pdf_bytes = completed.get("pdf_data")
             st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
             st.session_state.review_purchase_consumed.add(purchase_id)
+            review_submit_placeholder.empty()
 
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
             current_reference_text = (
@@ -1619,7 +1885,22 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
     render_form_gap(2)
 
-    if st.button("🐉 龍神さまのお告げを聞く"):
+    regular_pdf_generated = (
+        bool(st.session_state.get("fortune_pdf_bytes"))
+        and st.session_state.get("fortune_pdf_purchase_id") == purchase_id
+    )
+    regular_fortune_generated = (
+        bool(st.session_state.get("fortune_json"))
+        and st.session_state.get("fortune_pdf_purchase_id") == purchase_id
+    )
+    regular_generation_completed = regular_fortune_generated or regular_pdf_generated
+    regular_submit_placeholder = st.empty()
+    regular_submit_clicked = False
+    if not regular_generation_completed:
+        with regular_submit_placeholder:
+            regular_submit_clicked = st.button("🐉 龍神さまのお告げを聞く")
+
+    if regular_submit_clicked:
         st.session_state.fortune_json = None
         st.session_state.fortune_pdf_bytes = None
         st.session_state.fortune_pdf_purchase_id = None
@@ -1688,6 +1969,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 st.session_state.fortune_pdf_bytes = pdf_data
                 st.session_state.fortune_pdf_purchase_id = purchase_id
                 st.session_state.user_name = payload.user_name
+                regular_submit_placeholder.empty()
 
                 st.success("お告げを授かりました。今回の購入分は使用済みになりました。")
                 logger.info(
@@ -1792,12 +2074,12 @@ def main() -> None:
         return
 
     if active_purchase and active_purchase.get("used_flag"):
-        render_completion_screen()
+        render_completion_screen(get_purchase_product_type(active_purchase))
         st.stop()
 
     if active_purchase:
         if is_purchase_ready(active_purchase):
-            render_header()
+            render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
             if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
                 render_review_fortune_form(active_purchase, logger)
             else:
@@ -1829,3 +2111,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+

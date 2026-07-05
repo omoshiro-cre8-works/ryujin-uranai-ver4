@@ -3,14 +3,29 @@ from types import SimpleNamespace
 import pytest
 
 import app
+from services.validation_service import validate_review_inputs
 
 
 def make_review_inputs():
     return {
         "uploaded_pdf_bytes": b"previous-pdf",
         "pdf_analysis": {"is_valid_previous_pdf": True},
-        "current_inputs": {"selected_theme": "仕事"},
-        "current_private_inputs": {"user_name": "テストユーザー"},
+        "current_inputs": {
+            "birth_place": "東京都",
+            "birth_time_accuracy": "正確に分かる",
+            "birth_time_text": "12:00",
+            "selected_theme": "仕事",
+            "review_theme": "仕事",
+        },
+        "current_private_inputs": {
+            "user_name": "テストユーザー",
+            "birth_date": "1990-01-01",
+            "birth_place": "東京都",
+            "birth_time_accuracy": "正確に分かる",
+            "birth_time_text": "12:00",
+            "review_theme": "仕事",
+            "recent_note": "近況",
+        },
         "image_parts": [],
         "purchase_id": "p_review_test",
         "logger": SimpleNamespace(),
@@ -193,3 +208,47 @@ def test_review_generation_returns_no_result_when_consume_fails(monkeypatch):
 
     assert completed == {"status": "consume_failed"}
     assert calls == ["summary", "context", "fortune", "pdf", "consume"]
+
+
+def test_review_validation_requires_birth_place():
+    uploaded_pdf = SimpleNamespace(
+        name="previous.pdf",
+        type="application/pdf",
+        getvalue=lambda: b"%PDF-1.4 test",
+    )
+    uploaded_image = SimpleNamespace(name="palm.jpg", size=100)
+
+    errors = validate_review_inputs(
+        user_name="テスト ユーザー",
+        birth_date_selected=True,
+        birth_place="",
+        review_theme="仕事運",
+        uploaded_pdf=uploaded_pdf,
+        uploaded_files=[uploaded_image],
+        hand_sides=["左手"],
+        review_memo="近況です。",
+    )
+
+    assert "出生地をご入力ください。" in errors
+
+
+def test_review_validation_limits_birth_place_length():
+    uploaded_pdf = SimpleNamespace(
+        name="previous.pdf",
+        type="application/pdf",
+        getvalue=lambda: b"%PDF-1.4 test",
+    )
+    uploaded_image = SimpleNamespace(name="palm.jpg", size=100)
+
+    errors = validate_review_inputs(
+        user_name="テスト ユーザー",
+        birth_date_selected=True,
+        birth_place="東" * 101,
+        review_theme="仕事運",
+        uploaded_pdf=uploaded_pdf,
+        uploaded_files=[uploaded_image],
+        hand_sides=["左手"],
+        review_memo="近況です。",
+    )
+
+    assert "出生地は100文字以内でご入力ください。" in errors

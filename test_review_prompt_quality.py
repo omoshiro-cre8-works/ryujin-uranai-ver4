@@ -20,12 +20,63 @@ def make_review_context(palm_image_count):
                 "recent_3_months_status": "past",
             },
             "current_inputs": {
+                "birth_place": "東京都",
+                "birth_time_accuracy": "正確に分かる",
+                "birth_time_text": "12:00",
                 "selected_theme": "仕事運",
+                "review_theme": "仕事運",
                 "review_memo_present": True,
                 "palm_image_count": palm_image_count,
             },
         }
     }
+
+
+def test_review_context_keeps_birth_place_and_birth_time_accuracy():
+    context = fortune_service.build_review_context(
+        pdf_analysis={"previous_reading_date": "2026-01-01"},
+        previous_summary={},
+        current_inputs={
+            "birth_place": "東京都",
+            "birth_time_accuracy": "だいたい分かる",
+            "birth_time_text": "だいたい 12:00 頃",
+            "selected_theme": "仕事運",
+            "review_theme": "仕事運",
+            "review_memo_present": True,
+            "palm_image_count": 1,
+        },
+    )
+
+    current_inputs = context["review_context"]["current_inputs"]
+    assert current_inputs["birth_place"] == "東京都"
+    assert current_inputs["birth_time_accuracy"] == "だいたい分かる"
+    assert current_inputs["birth_time_text"] == "だいたい 12:00 頃"
+    assert current_inputs["review_theme"] == "仕事運"
+
+
+def test_review_prompt_includes_current_birth_inputs_without_weakening_review_focus():
+    prompt = fortune_service.build_review_fortune_prompt(
+        make_review_context(1),
+        {
+            "user_name": "テスト",
+            "birth_date": "1990-01-01",
+            "birth_place": "東京都",
+            "birth_time_accuracy": "正確に分かる",
+            "birth_time_text": "12:00",
+            "review_theme": "仕事運",
+            "recent_note": "仕事の方向性を見返したい",
+            "palm_image_information": {"image_count": 1, "status": "attached"},
+        },
+    )
+
+    assert '"birth_place": "東京都"' in prompt
+    assert '"birth_time_accuracy": "正確に分かる"' in prompt
+    assert '"birth_time_text": "12:00"' in prompt
+    assert '"review_theme": "仕事運"' in prompt
+    assert '"recent_note": "仕事の方向性を見返したい"' in prompt
+    assert "四柱推命・西洋占星術の土台として通常版と同等に扱う" in prompt
+    assert "鑑定全体を出生情報や専門用語だけに偏らせず" in prompt
+    assert "前回PDF、見返しテーマ、近況メモ、現在の手相画像との照合" in prompt
 
 
 def test_review_pdf_summary_prompt_limits_previous_palm_to_pdf_text():
@@ -92,10 +143,11 @@ def test_review_prompt_compresses_section_length_and_summary_overlap():
         {"user_name": "テスト", "review_memo": "近況"},
     )
 
-    assert "全体として1〜2割短い印象" in prompt
-    assert "今回の相談テーマに関係する部分を優先して3〜5項目程度" in prompt
+    assert "全体として2割ほど短い印象" in prompt
+    assert "3〜4項目の短い箇条書き中心" in prompt
     assert "1章と2章で同じ前回鑑定要約を繰り返さない" in prompt
     assert "2章後半に総括を書く場合は2〜4文程度" in prompt
+    assert "前回の全文要約や一般的な励ましより" in prompt
 
 
 def test_review_prompt_keeps_actions_and_closing_roles_separate():
@@ -105,8 +157,12 @@ def test_review_prompt_keeps_actions_and_closing_roles_separate():
     )
 
     assert "3章本文と同じ内容を再掲せず、具体行動は箇条書きに集約" in prompt
-    assert "説明文は1〜2文に抑え" in prompt
-    assert "3章の行動リストを再掲せず" in prompt
+    assert "説明文は1文程度に抑え" in prompt
+    assert "3章・4章の行動提案を再掲せず" in prompt
+    assert "3章、4章、6章は役割を分ける" in prompt
+    assert "同じ助言を言い換えて再掲しない" in prompt
+    assert "二重導入は避け" in prompt
+    assert "助言らしい温かさ" in prompt
     assert "龍神さまは大きな方向性、巫女は続ける工夫、結びは短い締め" in prompt
     assert "things_to_remember は1〜3文程度" in prompt
 
@@ -119,6 +175,7 @@ def test_review_prompt_asks_to_merge_alignment_blocks_without_repeated_labels():
     assert "本文では毎回ラベル分けせず" in prompt
     assert "短い導入・要点・まとめ" in prompt
     assert "同じ事実を章ごとに繰り返さず" in prompt
+    assert "同じ手相説明や同じ補足を別ブロックで繰り返さない" in prompt
     assert "3章は具体的な行動に集中する" in prompt
     assert "巫女の助言」では同じ行動リストを繰り返さず" in prompt
     assert "単なるメモの羅列にしない" in prompt
@@ -152,6 +209,15 @@ def test_review_comparison_blocks_render_with_helper_labels_without_old_labels()
     assert "現在見えていること\n・現在は販売後の改善点" in text
 
 
+def test_review_action_items_use_short_label_without_duplicate_three_month_intro():
+    text = pdf_service._format_next_3_month_action_items(
+        {"next_3_month_action_items": ["申込導線を1つ確認する"]}
+    )
+
+    assert text.startswith("意識したい小さな行動:")
+    assert "これから3カ月は、以下のような" not in text
+    assert "・申込導線を1つ確認する" in text
+
 def test_review_prompt_forbids_current_palm_reading_without_image():
     prompt = fortune_service.build_review_fortune_prompt(
         make_review_context(0),
@@ -170,9 +236,11 @@ def test_review_prompt_suppresses_spiritual_sales_tone_and_repetition():
 
     assert "『そなた』" not in prompt
     assert "「そなた」" in prompt
-    assert "は使わない" in prompt
+    assert "基本的に避ける" in prompt
     assert "同じ助言・励まし・結論は本文全体で原則1回" in prompt
     assert "語句を言い換えただけの反復も避ける" in prompt
+    assert "複数章で繰り返さない" in prompt
+    assert "休息を大切にする" in prompt
     assert "少し時間を置いて読み返す" in prompt
     assert "購入や継続利用を直接勧めない" in prompt
 
@@ -200,6 +268,13 @@ def test_review_prompt_limits_reassurance_family_and_new_guidance_tone():
     assert "龍神さまからの新たな導き" in prompt
     assert "現在の流れをあらためて読み直す" in prompt
     assert "今の状況を静かに見返す" in prompt
+    assert "豊かな実り" in prompt
+    assert "内なる声" in prompt
+    assert "龍神は見守っています" in prompt
+    assert "道を切り開く力" in prompt
+    assert "新たな流れを創り出す" in prompt
+    assert "現実の状況に接続した短い言葉" in prompt
+    assert "お告げらしい余韻" in prompt
 
 
 def test_review_output_allows_advisory_phrases_with_diagnostics():

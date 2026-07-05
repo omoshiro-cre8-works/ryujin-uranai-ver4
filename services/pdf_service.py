@@ -244,7 +244,7 @@ def _format_next_3_month_action_items(review_fortune: dict[str, Any]) -> str:
     items = _clean_string_list((review_fortune or {}).get("next_3_month_action_items"))
     if not items:
         return ""
-    intro = "これから3カ月は、以下のような小さな行動を意識するとよさそうです。"
+    intro = "意識したい小さな行動:"
     return "\n".join([intro, "", *[f"・{item}" for item in items]])
 
 
