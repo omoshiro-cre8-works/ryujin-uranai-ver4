@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import stripe
@@ -78,6 +79,8 @@ APP_BASE_URL = os.getenv(
     "https://ai-uranai-h1-155905710900.asia-northeast2.run.app",
 ).rstrip("/")
 WIX_REGULAR_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai"
+WIX_SITE_TOP_URL = "https://www.omoshiro-cre8works.com/"
+WIX_REVIEW_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai/mikaeshibin"
 WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
     WIX_REGULAR_LP_URL,
@@ -88,7 +91,7 @@ REGULAR_TOP_URL = (
     if _CONFIGURED_REGULAR_TOP_URL and _CONFIGURED_REGULAR_TOP_URL.rstrip("/") != APP_BASE_URL
     else WIX_REGULAR_LP_URL
 )
-REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", "").strip()
+REVIEW_LP_URL = os.getenv("REVIEW_LP_URL", WIX_REVIEW_LP_URL).strip() or WIX_REVIEW_LP_URL
 
 
 def get_int_env(key: str, default: int) -> int:
@@ -119,11 +122,11 @@ GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
     "REGULAR_COMPLETION_ILLUSTRATION",
-    str(ASSETS_DIR / "regular_completion_illustration.png"),
+    str(ASSETS_DIR / "miko_pdf.png"),
 ).strip()
 REVIEW_COMPLETION_ILLUSTRATION = os.getenv(
     "REVIEW_COMPLETION_ILLUSTRATION",
-    str(ASSETS_DIR / "review_completion_illustration.png"),
+    str(ASSETS_DIR / "nico_pdf.png"),
 ).strip()
 SAMPLE_PDF_IMAGE_PATHS = [
     ASSETS_DIR / "sample_pdf_1.png",
@@ -169,6 +172,58 @@ def render_inline_png(
                 style="{width_style} max-width:100%; height:auto; display:block; margin:0 auto;"
             >
             {caption_html}
+        </figure>
+        '''
+    )
+
+
+def scroll_completion_screen_to_top() -> None:
+    components.html(
+        '''
+        <script>
+        const scrollCompletionToTop = () => {
+            try {
+                const parentDocument = window.parent.document;
+                const scrollTargets = [
+                    window.parent,
+                    parentDocument.documentElement,
+                    parentDocument.body,
+                    parentDocument.querySelector('[data-testid="stAppViewContainer"]'),
+                    parentDocument.querySelector('[data-testid="stMain"]')
+                ];
+                scrollTargets.forEach((target) => {
+                    if (!target) return;
+                    if (typeof target.scrollTo === 'function') {
+                        target.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+                    } else {
+                        target.scrollTop = 0;
+                        target.scrollLeft = 0;
+                    }
+                });
+            } catch (error) {
+                window.parent.scrollTo(0, 0);
+            }
+        };
+        scrollCompletionToTop();
+        window.requestAnimationFrame(scrollCompletionToTop);
+        window.setTimeout(scrollCompletionToTop, 80);
+        window.setTimeout(scrollCompletionToTop, 300);
+        </script>
+        ''',
+        height=0,
+        width=0,
+    )
+
+
+def render_completion_miko_image(image_bytes: bytes) -> None:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    st.html(
+        f'''
+        <figure class="completion-miko-figure">
+            <img
+                src="data:image/png;base64,{encoded}"
+                alt="巫女画像"
+            >
         </figure>
         '''
     )
@@ -1068,10 +1123,10 @@ def get_completion_screen_content(product_type: str) -> dict[str, str]:
             ),
             "primary_label": "見返し便ページに戻る",
             "primary_url": REVIEW_LP_URL,
-            "secondary_label": "『龍神さまのお告げ』トップに戻る",
-            "secondary_url": REGULAR_TOP_URL,
+            "secondary_label": "OMOSHIRO CRE8 WORKS トップに戻る",
+            "secondary_url": WIX_SITE_TOP_URL,
             "illustration_path": REVIEW_COMPLETION_ILLUSTRATION,
-            "illustration_alt": "巫女がPDFを両手に持っているイラスト",
+            "illustration_alt": "NICOがお告げPDFを読んでいるイラスト",
         }
 
     return {
@@ -1092,10 +1147,10 @@ def get_completion_screen_content(product_type: str) -> dict[str, str]:
         ),
         "primary_label": "見返し便をくわしく見る",
         "primary_url": REVIEW_LP_URL,
-        "secondary_label": "『龍神さまのお告げ』トップに戻る",
-        "secondary_url": REGULAR_TOP_URL,
+        "secondary_label": "OMOSHIRO CRE8 WORKS トップに戻る",
+        "secondary_url": WIX_SITE_TOP_URL,
         "illustration_path": REGULAR_COMPLETION_ILLUSTRATION,
-        "illustration_alt": "巫女がPDFを読んで見返しているイラスト",
+        "illustration_alt": "巫女が鑑定書を2つ持っているイラスト",
     }
 
 
@@ -1146,33 +1201,55 @@ def render_completion_link_button(
     )
 
 
-def render_completion_auxiliary_illustration(content: dict[str, str]) -> None:
+def render_completion_guide_block(content: dict[str, str], guide_body_html: str) -> None:
     illustration_path = (content.get("illustration_path") or "").strip()
-    if not illustration_path:
-        return
+    illustration_html = ""
+    if illustration_path:
+        illustration_bytes = read_image_bytes(illustration_path)
+        if illustration_bytes:
+            encoded = base64.b64encode(illustration_bytes).decode("ascii")
+            safe_alt = html.escape(content.get("illustration_alt") or "完了画面補助イラスト", quote=True)
+            illustration_html = f'''
+            <figure style="flex:0 1 220px; min-width:160px; margin:0; text-align:center;">
+                <img
+                    src="data:image/png;base64,{encoded}"
+                    alt="{safe_alt}"
+                    style="width:min(100%, 220px); max-height:260px; height:auto; object-fit:contain; display:block; margin:0 auto;"
+                >
+            </figure>
+            '''
 
-    illustration_bytes = read_image_bytes(illustration_path)
-    if not illustration_bytes:
-        return
-
-    render_form_gap(1)
-    left, center, right = st.columns([1, 1.8, 1])
-    with center:
-        render_inline_png(
-            illustration_bytes,
-            alt=content.get("illustration_alt") or "完了画面補助イラスト",
-            width=280,
-        )
+    st.html(
+        f'''
+        <div style="border:1px solid #ead5cb; border-radius:14px; padding:16px 18px;
+                    background:#fffdfa; margin-top:1.1rem; margin-bottom:0.9rem;
+                    box-shadow:0 1px 0 rgba(0, 0, 0, 0.02);">
+            <div style="font-size:1.35rem; font-weight:700; color:#8a3d24;
+                        margin-bottom:0.8rem; line-height:1.6;">
+                {html.escape(content["guide_heading"])}
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between;
+                        gap:1.1rem 1.4rem; flex-wrap:wrap;">
+                <div style="line-height:1.9; color:#2f2f2f; font-size:0.98rem;
+                            text-align:left; font-weight:500; flex:1 1 250px; min-width:0;">
+                    {guide_body_html}
+                </div>
+                {illustration_html}
+            </div>
+        </div>
+        '''
+    )
 
 
 def render_completion_screen(product_type: str | None = None) -> None:
     content = get_completion_screen_content(normalize_product_type(product_type))
+    scroll_completion_screen_to_top()
     render_form_gap(2)
     left, center, right = st.columns([1, 1.4, 1])
     with center:
         miko_image_bytes = read_image_bytes(MIKO_IMAGE_PATH)
         if miko_image_bytes:
-            render_inline_png(miko_image_bytes, alt="巫女画像")
+            render_completion_miko_image(miko_image_bytes)
 
     thanks_html = "<br>".join(html.escape(line) for line in content["thanks_body"].split("\n"))
     guide_body_html = "<br>".join(html.escape(line.strip()) for line in content["guide_body"].split("\n"))
@@ -1189,22 +1266,8 @@ def render_completion_screen(product_type: str | None = None) -> None:
         unsafe_allow_html=True,
     )
 
-    render_completion_auxiliary_illustration(content)
+    render_completion_guide_block(content, guide_body_html)
 
-    st.html(
-        f'''
-        <div style="border:1px solid #ead5cb; border-radius:14px; padding:16px 18px;
-                    background:#fffdfa; margin-top:1.1rem; margin-bottom:0.9rem;
-                    box-shadow:0 1px 0 rgba(0, 0, 0, 0.02);">
-            <div style="font-size:1.35rem; font-weight:700; color:#8a3d24;
-                        margin-bottom:0.8rem; line-height:1.6;">
-                {html.escape(content["guide_heading"])}
-            </div>
-            <div style="line-height:1.9; color:#2f2f2f; font-size:0.98rem;
-                        text-align:left; font-weight:500;">{guide_body_html}</div>
-        </div>
-        '''
-    )
 
     has_primary_button = should_show_review_completion_cta(content.get("primary_url"))
     if has_primary_button:
@@ -1414,7 +1477,23 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
 
     render_form_gap(2)
 
-    if st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit"):
+    purchase_id = active_purchase.get("purchase_id")
+    review_fortune_generated = (
+        bool(st.session_state.get("review_fortune"))
+        and st.session_state.get("review_fortune_purchase_id") == purchase_id
+    )
+    review_pdf_generated = (
+        bool(st.session_state.get("review_pdf_bytes"))
+        and st.session_state.get("review_pdf_generated_purchase_id") == purchase_id
+    )
+    review_generation_completed = review_fortune_generated or review_pdf_generated
+    review_submit_placeholder = st.empty()
+    review_submit_clicked = False
+    if not review_generation_completed:
+        with review_submit_placeholder:
+            review_submit_clicked = st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit")
+
+    if review_submit_clicked:
         st.session_state.review_context = None
         st.session_state.review_fortune = None
         st.session_state.review_fortune_purchase_id = None
@@ -1561,6 +1640,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             st.session_state.review_pdf_bytes = completed.get("pdf_data")
             st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
             st.session_state.review_purchase_consumed.add(purchase_id)
+            review_submit_placeholder.empty()
 
             previous_reading_date_label = format_iso_date_japanese(previous_reading_date)
             current_reference_text = (
@@ -1805,7 +1885,22 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
     render_form_gap(2)
 
-    if st.button("🐉 龍神さまのお告げを聞く"):
+    regular_pdf_generated = (
+        bool(st.session_state.get("fortune_pdf_bytes"))
+        and st.session_state.get("fortune_pdf_purchase_id") == purchase_id
+    )
+    regular_fortune_generated = (
+        bool(st.session_state.get("fortune_json"))
+        and st.session_state.get("fortune_pdf_purchase_id") == purchase_id
+    )
+    regular_generation_completed = regular_fortune_generated or regular_pdf_generated
+    regular_submit_placeholder = st.empty()
+    regular_submit_clicked = False
+    if not regular_generation_completed:
+        with regular_submit_placeholder:
+            regular_submit_clicked = st.button("🐉 龍神さまのお告げを聞く")
+
+    if regular_submit_clicked:
         st.session_state.fortune_json = None
         st.session_state.fortune_pdf_bytes = None
         st.session_state.fortune_pdf_purchase_id = None
@@ -1874,6 +1969,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 st.session_state.fortune_pdf_bytes = pdf_data
                 st.session_state.fortune_pdf_purchase_id = purchase_id
                 st.session_state.user_name = payload.user_name
+                regular_submit_placeholder.empty()
 
                 st.success("お告げを授かりました。今回の購入分は使用済みになりました。")
                 logger.info(
@@ -2015,3 +2111,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
