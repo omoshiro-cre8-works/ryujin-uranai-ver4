@@ -314,3 +314,60 @@ def test_legacy_purchase_records_can_be_read_without_tracking_fields(monkeypatch
     )
 
     assert firestore_service.is_purchase_usable("legacy-token") is True
+
+
+def test_create_purchase_record_initializes_ga4_sent_flags(monkeypatch):
+    client = FakeFirestoreClient()
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+
+    firestore_service.create_purchase_record(
+        purchase_id="p_ga4_flags",
+        stripe_checkout_session_id="cs_1",
+        access_token="token",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    payload = client.collection_ref.document_ref.payload
+    assert payload["ga4_reading_started_sent"] is False
+    assert payload["ga4_reading_started_sent_at"] is None
+    assert payload["ga4_pdf_generated_sent"] is False
+    assert payload["ga4_pdf_generated_sent_at"] is None
+
+
+def test_is_ga4_event_sent_treats_legacy_missing_field_as_false(monkeypatch):
+    record = {"purchase_id": "p_legacy"}
+    monkeypatch.setattr(
+        firestore_service,
+        "get_firestore_client",
+        lambda: FakeFirestoreClient([record]),
+    )
+
+    assert firestore_service.is_ga4_event_sent("p_legacy", "reading_started") is False
+    assert firestore_service.is_ga4_event_sent("p_legacy", "pdf_generated") is False
+
+
+def test_mark_ga4_event_sent_if_unset_sets_flag_and_timestamp(monkeypatch):
+    record = {"purchase_id": "p_ga4", "ga4_reading_started_sent": False}
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+
+    marked = firestore_service.mark_ga4_event_sent_if_unset("p_ga4", "reading_started")
+
+    assert marked is True
+    assert len(client.transaction_ref.updates) == 1
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["ga4_reading_started_sent"] is True
+    assert updates["ga4_reading_started_sent_at"] == updates["updated_at"]
+
+
+def test_mark_ga4_event_sent_if_unset_skips_already_sent(monkeypatch):
+    record = {"purchase_id": "p_ga4", "ga4_pdf_generated_sent": True}
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+
+    marked = firestore_service.mark_ga4_event_sent_if_unset("p_ga4", "pdf_generated")
+
+    assert marked is False
+    assert client.transaction_ref.updates == []

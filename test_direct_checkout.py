@@ -289,3 +289,80 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
     assert metadata["utm_source"] == "instagram"
     assert metadata["test_mode"] == "owner"
     assert metadata["button_position"] == "top"
+
+
+def test_track_purchase_ga4_event_once_sends_and_marks(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "is_ga4_event_sent", lambda purchase_id, event_name: False)
+    monkeypatch.setattr(
+        app,
+        "track_ga4_event",
+        lambda event_name, logger, params: calls.append((event_name, params)) or True,
+    )
+    monkeypatch.setattr(
+        app,
+        "mark_ga4_event_sent_if_unset",
+        lambda purchase_id, event_name: calls.append(("mark", purchase_id, event_name)) or True,
+    )
+
+    sent = app.track_purchase_ga4_event_once(
+        "reading_started",
+        "p_1",
+        "regular",
+        SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    assert sent is True
+    assert calls == [
+        ("reading_started", {"product_type": "regular"}),
+        ("mark", "p_1", "reading_started"),
+    ]
+
+
+def test_track_purchase_ga4_event_once_skips_sent_purchase(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "is_ga4_event_sent", lambda purchase_id, event_name: True)
+    monkeypatch.setattr(
+        app,
+        "track_ga4_event",
+        lambda *args, **kwargs: calls.append("track") or True,
+    )
+    monkeypatch.setattr(
+        app,
+        "mark_ga4_event_sent_if_unset",
+        lambda *args, **kwargs: calls.append("mark") or True,
+    )
+
+    handled = app.track_purchase_ga4_event_once(
+        "pdf_generated",
+        "p_1",
+        "review",
+        SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    assert handled is True
+    assert calls == []
+
+
+def test_track_purchase_ga4_event_once_does_not_mark_when_ga4_fails(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "is_ga4_event_sent", lambda purchase_id, event_name: False)
+    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        app,
+        "mark_ga4_event_sent_if_unset",
+        lambda *args, **kwargs: calls.append("mark") or True,
+    )
+
+    sent = app.track_purchase_ga4_event_once(
+        "reading_started",
+        "p_1",
+        "regular",
+        SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    assert sent is False
+    assert calls == []

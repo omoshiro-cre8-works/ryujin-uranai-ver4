@@ -46,6 +46,8 @@ from services.firestore_service import (
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
     get_purchase_by_access_token,
+    is_ga4_event_sent,
+    mark_ga4_event_sent_if_unset,
 )
 from services.fortune_service import (
     build_image_parts,
@@ -606,6 +608,33 @@ def track_ga4_event(
         params=event_params,
         logger=logger,
     )
+
+def track_purchase_ga4_event_once(
+    event_name: str,
+    purchase_id: str | None,
+    product_type: str,
+    logger: logging.Logger,
+) -> bool:
+    """Send a GA4 purchase-scoped event once, using Firestore as the durable sent flag."""
+    if not purchase_id:
+        return False
+
+    try:
+        if is_ga4_event_sent(purchase_id, event_name):
+            return True
+    except Exception:
+        logger.warning("ga4_event_sent_check_failed", extra={"event_name": event_name})
+        return False
+
+    sent = track_ga4_event(event_name, logger, {"product_type": product_type})
+    if not sent:
+        return False
+
+    try:
+        mark_ga4_event_sent_if_unset(purchase_id, event_name)
+    except Exception:
+        logger.warning("ga4_event_sent_mark_failed", extra={"event_name": event_name})
+    return True
 
 def track_streamlit_page_view(logger: logging.Logger, product_type: str) -> None:
     page_location = get_page_location()
@@ -1814,6 +1843,12 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             purchase_id = str(active_purchase.get("purchase_id") or "")
             try:
                 with st.spinner("前回のお告げを要約し、見返し便の鑑定とPDFを生成しています..."):
+                    track_purchase_ga4_event_once(
+                        "reading_started",
+                        purchase_id,
+                        product_type,
+                        logger,
+                    )
                     completed = generate_review_fortune_pdf_and_consume(
                         uploaded_pdf_bytes=uploaded_pdf_bytes,
                         pdf_analysis=pdf_analysis,
@@ -1961,6 +1996,10 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         review_pdf_bytes = st.session_state.get("review_pdf_bytes")
         review_pdf_purchase_id = st.session_state.get("review_pdf_generated_purchase_id")
         if review_pdf_bytes and review_pdf_purchase_id == purchase_id:
+            tracked_purchase_ids = st.session_state.ga4_pdf_generated_purchase_ids
+            if purchase_id and purchase_id not in tracked_purchase_ids:
+                if track_purchase_ga4_event_once("pdf_generated", purchase_id, product_type, logger):
+                    tracked_purchase_ids.add(purchase_id)
             today_text = datetime.date.today().strftime("%Y%m%d")
             st.download_button(
                 label="見返し便PDFをダウンロードする",
@@ -2189,6 +2228,12 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
                 with st.spinner("龍神さまが降臨されています..."):
                     purchase_id = str(active_purchase.get("purchase_id") or "")
+                    track_purchase_ga4_event_once(
+                        "reading_started",
+                        purchase_id,
+                        product_type,
+                        logger,
+                    )
                     completed = generate_regular_fortune_pdf_and_consume(
                         payload,
                         purchase_id,
@@ -2263,8 +2308,8 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
         if pdf_data and st.session_state.get("fortune_pdf_purchase_id") == purchase_id:
             tracked_purchase_ids = st.session_state.ga4_pdf_generated_purchase_ids
             if purchase_id and purchase_id not in tracked_purchase_ids:
-                track_ga4_event("pdf_generated", logger, {"product_type": product_type})
-                tracked_purchase_ids.add(purchase_id)
+                if track_purchase_ga4_event_once("pdf_generated", purchase_id, product_type, logger):
+                    tracked_purchase_ids.add(purchase_id)
             safe_name = st.session_state.user_name.replace(" ", "_")
             st.download_button(
                 label="📜 巫女からの手紙を保存する（PDF）",

@@ -451,3 +451,11 @@ product_type=regular|review
 ```
 
 `button_position` は `button_position`、`button`、既存 `utm_content` の順で補完され、保存値は `top` / `middle` / `bottom` / `unknown` に正規化されます。`test_mode` は分析用ラベルで、認証・決済・利用権判定には使用しません。
+
+### GA4第2段階イベント
+
+第2段階では既存の Measurement Protocol 構成のまま、`reading_started` と見返し便の `pdf_generated` を追加します。`pdf_generated` は通常版・見返し便で同じイベント名を使い、`product_type=regular|review` で区別します。
+
+`reading_started` と `pdf_generated` は purchase 単位で Firestore の送信済みフラグを確認し、GA4送信成功時だけ `ga4_reading_started_sent` / `ga4_pdf_generated_sent` を `true` にします。GA4送信に失敗しても、鑑定生成・PDF生成・購入分の使用済み更新は継続します。
+
+`payment_completed`、ブラウザ側 `gtag.js`、GTM、WebhookからのGA4送信はこの段階では実装しません。

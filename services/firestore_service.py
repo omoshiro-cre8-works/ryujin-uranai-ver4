@@ -9,6 +9,10 @@ from google.cloud import firestore
 
 
 COLLECTION_NAME = "purchases"
+GA4_EVENT_FIELD_MAP: Dict[str, tuple[str, str]] = {
+    "reading_started": ("ga4_reading_started_sent", "ga4_reading_started_sent_at"),
+    "pdf_generated": ("ga4_pdf_generated_sent", "ga4_pdf_generated_sent_at"),
+}
 
 
 def _now_utc() -> datetime:
@@ -89,6 +93,10 @@ def create_purchase_record(
         "payment_status": "pending",
         "used_flag": False,
         "used_at": None,
+        "ga4_reading_started_sent": False,
+        "ga4_reading_started_sent_at": None,
+        "ga4_pdf_generated_sent": False,
+        "ga4_pdf_generated_sent_at": None,
         "access_token_hash": hash_access_token(access_token),
         "token_expires_at": token_expires_at,
         "product_type": product_type if product_type in {"regular", "review"} else "regular",
@@ -224,6 +232,56 @@ def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
     return consume(transaction)
 
 
+
+def get_ga4_event_fields(event_name: str) -> tuple[str, str]:
+    try:
+        return GA4_EVENT_FIELD_MAP[event_name]
+    except KeyError as exc:
+        raise ValueError(f"unsupported GA4 event: {event_name}") from exc
+
+
+def is_ga4_event_sent(purchase_id: str, event_name: str) -> bool:
+    """GA4イベント送信済みフラグを確認する。未設定の古いレコードは未送信扱い。"""
+    if not purchase_id:
+        return False
+
+    sent_field, _ = get_ga4_event_fields(event_name)
+    purchase = get_purchase_by_id(purchase_id)
+    return bool(purchase and purchase.get(sent_field) is True)
+
+
+def mark_ga4_event_sent_if_unset(purchase_id: str, event_name: str) -> bool:
+    """GA4送信成功後に、未送信の場合だけ送信済みに更新する。"""
+    if not purchase_id:
+        return False
+
+    sent_field, sent_at_field = get_ga4_event_fields(event_name)
+    db = get_firestore_client()
+    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def mark_sent(transaction: Any) -> bool:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return False
+
+        purchase = snapshot.to_dict() or {}
+        if purchase.get(sent_field) is True:
+            return False
+
+        now = _now_utc()
+        transaction.update(
+            doc_ref,
+            {
+                sent_field: True,
+                sent_at_field: now,
+                "updated_at": now,
+            },
+        )
+        return True
+
+    return mark_sent(transaction)
 def mark_purchase_paid(
     purchase_id: str,
     stripe_event_id: Optional[str] = None,
