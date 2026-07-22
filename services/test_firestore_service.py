@@ -257,3 +257,60 @@ def test_is_purchase_usable_preserves_existing_guards(monkeypatch, record_update
     )
 
     assert firestore_service.is_purchase_usable("token") is expected
+
+
+def test_create_purchase_record_saves_tracking_params_without_private_fields(monkeypatch):
+    client = FakeFirestoreClient()
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+
+    token = "secret-access-token"
+    firestore_service.create_purchase_record(
+        purchase_id="p_tracking",
+        stripe_checkout_session_id="cs_tracking",
+        access_token=token,
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        product_type="review",
+        tracking_params={
+            "service_id": "ryujin",
+            "utm_source": "instagram",
+            "utm_medium": "paid_social",
+            "utm_campaign": "summer",
+            "utm_content": "hero",
+            "test_mode": "owner",
+            "button_position": "top",
+            "user_name": "should-not-save",
+            "birth_date": "should-not-save",
+            "email": "should-not-save",
+            "pdf_body": "should-not-save",
+        },
+    )
+
+    payload = client.collection_ref.document_ref.payload
+    assert payload["product_type"] == "review"
+    assert payload["service_id"] == "ryujin"
+    assert payload["utm_source"] == "instagram"
+    assert payload["utm_medium"] == "paid_social"
+    assert payload["utm_campaign"] == "summer"
+    assert payload["utm_content"] == "hero"
+    assert payload["test_mode"] == "owner"
+    assert payload["button_position"] == "top"
+    assert "user_name" not in payload
+    assert "birth_date" not in payload
+    assert "email" not in payload
+    assert "pdf_body" not in payload
+
+
+def test_legacy_purchase_records_can_be_read_without_tracking_fields(monkeypatch):
+    record = {
+        "purchase_id": "p_legacy",
+        "payment_status": "paid",
+        "used_flag": False,
+        "token_expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    monkeypatch.setattr(
+        firestore_service,
+        "get_purchase_by_access_token",
+        lambda access_token: record,
+    )
+
+    assert firestore_service.is_purchase_usable("legacy-token") is True

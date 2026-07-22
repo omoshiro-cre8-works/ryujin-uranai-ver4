@@ -146,3 +146,146 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     assert any("龍神さまのお告げ 見返し便" in value for value in rendered_markdown)
     assert any("680円" in value for value in rendered_markdown)
     assert any("見返し便フォーム" in value for value in rendered_info)
+
+
+class AttrDict(dict):
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
+def test_tracking_param_normalization_rules(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "product_type": "review",
+            "test_mode": "owner",
+            "button": "first_view",
+            "utm_source": " instagram ",
+            "utm_campaign": "x" * 130,
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.get_tracking_params_from_query()
+
+    assert params["product_type"] == "review"
+    assert params["test_mode"] == "owner"
+    assert params["button_position"] == "top"
+    assert params["utm_source"] == "instagram"
+    assert len(params["utm_campaign"]) == app.TRACKING_VALUE_MAX_LENGTH
+
+
+def test_tracking_param_invalid_values_fall_back(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "product_type": "bad",
+            "test_mode": "staff",
+            "button_position": "side",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.get_tracking_params_from_query()
+
+    assert params["product_type"] == "regular"
+    assert params["test_mode"] == "none"
+    assert params["button_position"] == "unknown"
+
+
+def test_button_position_legacy_aliases():
+    assert app.normalize_button_position("top") == "top"
+    assert app.normalize_button_position("middle") == "middle"
+    assert app.normalize_button_position("bottom") == "bottom"
+    assert app.normalize_button_position("sample_after") == "middle"
+    assert app.normalize_button_position("sumple_after") == "middle"
+    assert app.normalize_button_position("unknown_value") == "unknown"
+
+
+def test_success_url_includes_tracking_params(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="instagram",
+            utm_medium="paid_social",
+            utm_campaign="summer",
+            utm_content="hero",
+            test_mode="owner",
+            button_position="top",
+        ),
+        query_params={},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    url = app.build_checkout_success_url("p_1", "token_1", "review")
+
+    assert "session_id={CHECKOUT_SESSION_ID}" in url
+    assert "purchase_id=p_1" in url
+    assert "product_type=review" in url
+    assert "utm_source=instagram" in url
+    assert "utm_medium=paid_social" in url
+    assert "utm_campaign=summer" in url
+    assert "utm_content=hero" in url
+    assert "test_mode=owner" in url
+    assert "button_position=top" in url
+
+
+def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monkeypatch):
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id="cs_test_1", url="https://checkout.example/session")
+
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="instagram",
+            utm_medium="paid_social",
+            utm_campaign="summer",
+            utm_content="hero",
+            test_mode="owner",
+            button_position="top",
+        ),
+    )
+    stripe_stub = SimpleNamespace(
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 680))
+    monkeypatch.setattr(
+        app,
+        "create_purchase_record",
+        lambda price_id, amount_jpy, product_type, price_type: {
+            "purchase_id": "p_1",
+            "_access_token": "token_1",
+        },
+    )
+    monkeypatch.setattr(app, "update_purchase_record", lambda purchase_id, **updates: {})
+    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: True)
+
+    checkout_url, error = app.create_checkout_session("review", SimpleNamespace(info=lambda *args, **kwargs: None))
+
+    assert error is None
+    assert checkout_url == "https://checkout.example/session"
+    assert captured["client_reference_id"] == "p_1"
+    metadata = captured["metadata"]
+    assert metadata["purchase_id"] == "p_1"
+    assert metadata["product_type"] == "review"
+    assert metadata["price_type"] == "review_regular"
+    assert metadata["price_id"] == "price_review"
+    assert metadata["amount_jpy"] == "680"
+    assert metadata["service_id"] == "ryujin"
+    assert metadata["utm_source"] == "instagram"
+    assert metadata["test_mode"] == "owner"
+    assert metadata["button_position"] == "top"

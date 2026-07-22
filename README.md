@@ -434,3 +434,20 @@ uranai_app_stage3_base/
 ### 運用メモ
 紹介ページ → アプリ → 鑑定 → PDF保存までを通して確認し、大きな破綻がなければ公開可と判断する。  
 気になる点があっても、重大不具合でなければ軽微修正後に公開可とする。
+
+## GA4計測パラメータ
+
+Cloud Run では以下のURLパラメータを計測用に受け取り、Streamlit session state、Stripe metadata、Firestore purchase、既存GA4 Measurement Protocolイベントへ引き継ぎます。
+
+```text
+utm_source
+utm_medium
+utm_campaign
+utm_content
+test_mode=owner|none
+button_position=top|middle|bottom|unknown
+button=top|middle|bottom|first_view|hero|sample_after|sumple_after
+product_type=regular|review
+```
+
+`button_position` は `button_position`、`button`、既存 `utm_content` の順で補完され、保存値は `top` / `middle` / `bottom` / `unknown` に正規化されます。`test_mode` は分析用ラベルで、認証・決済・利用権判定には使用しません。

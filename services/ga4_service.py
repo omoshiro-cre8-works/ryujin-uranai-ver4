@@ -7,6 +7,7 @@ from typing import Any
 
 
 GA4_ENDPOINT = "https://www.google-analytics.com/mp/collect"
+GA4_PARAM_VALUE_MAX_LENGTH = 100
 
 
 def is_ga4_enabled(enabled_value: bool | str | None) -> bool:
@@ -75,8 +76,10 @@ def _clean_event_params(params: dict[str, Any]) -> dict[str, Any]:
     for key, value in params.items():
         if value is None:
             continue
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            clean_params[key] = value[:GA4_PARAM_VALUE_MAX_LENGTH]
+        elif isinstance(value, (int, float, bool)):
             clean_params[key] = value
         else:
-            clean_params[key] = str(value)
+            clean_params[key] = str(value)[:GA4_PARAM_VALUE_MAX_LENGTH]
     return clean_params

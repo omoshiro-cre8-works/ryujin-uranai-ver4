@@ -42,6 +42,7 @@ def create_purchase_record(
     amount_jpy: int = 300,
     currency: str = "jpy",
     source: str = "wix_lp",
+    tracking_params: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     購入レコードを新規作成する。
@@ -57,6 +58,7 @@ def create_purchase_record(
         amount_jpy: 金額（既定 300）
         currency: 通貨（既定 jpy）
         source: 流入元や購入元の識別子
+        tracking_params: GA4/キャンペーン計測用の非個人情報
 
     Returns:
         作成した purchase_id
@@ -65,6 +67,20 @@ def create_purchase_record(
     doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
 
     now = _now_utc()
+    safe_tracking_params = {
+        key: str(value)[:100]
+        for key, value in (tracking_params or {}).items()
+        if key in {
+            "service_id",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "test_mode",
+            "button_position",
+        }
+        and value is not None
+    }
 
     payload: Dict[str, Any] = {
         "purchase_id": purchase_id,
@@ -83,11 +99,11 @@ def create_purchase_record(
         "source": source,
         "created_at": now,
         "updated_at": now,
+        **safe_tracking_params,
     }
 
     doc_ref.set(payload)
     return purchase_id
-
 
 def get_purchase_by_id(purchase_id: str) -> Optional[Dict[str, Any]]:
     """

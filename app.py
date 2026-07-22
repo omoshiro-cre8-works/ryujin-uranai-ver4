@@ -118,6 +118,30 @@ STRIPE_ENABLED = bool(stripe and STRIPE_SECRET_KEY and STRIPE_PRICE_ID_REGULAR)
 PRODUCT_TYPE_REGULAR = "regular"
 PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
+SERVICE_ID = "ryujin"
+TRACKING_VALUE_MAX_LENGTH = 100
+TRACKING_PARAM_KEYS = (
+    "service_id",
+    "product_type",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_content",
+    "test_mode",
+    "button_position",
+)
+UTM_PARAM_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
+VALID_TEST_MODES = {"owner", "none"}
+VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "unknown"}
+BUTTON_POSITION_ALIASES = {
+    "first_view": "top",
+    "hero": "top",
+    "top": "top",
+    "sample_after": "middle",
+    "sumple_after": "middle",
+    "middle": "middle",
+    "bottom": "bottom",
+}
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
@@ -275,6 +299,9 @@ def init_session_state() -> None:
         st.session_state.review_pdf_generated_purchase_id = None
     if "review_purchase_consumed" not in st.session_state:
         st.session_state.review_purchase_consumed = set()
+    for key, value in get_default_tracking_params().items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def get_query_param_value(key: str) -> str | None:
@@ -284,14 +311,163 @@ def get_query_param_value(key: str) -> str | None:
     return str(value) if value is not None else None
 
 
-def get_utm_params() -> dict[str, str]:
-    utm_params = {}
-    for key in ["utm_source", "utm_medium", "utm_campaign", "utm_content"]:
-        value = get_query_param_value(key)
-        if value:
-            utm_params[key] = value
-    return utm_params
+def clean_tracking_value(value: Any, max_length: int = TRACKING_VALUE_MAX_LENGTH) -> str:
+    raw_value = "" if value is None else str(value)
+    stripped_value = raw_value.strip()
+    safe_value = "".join(
+        character
+        for character in stripped_value
+        if character.isprintable() and character not in {"\x7f"}
+    )
+    return safe_value[:max_length]
 
+
+def normalize_test_mode(value: str | None) -> str:
+    normalized = clean_tracking_value(value).lower()
+    if normalized in VALID_TEST_MODES:
+        return normalized
+    return "none"
+
+
+def normalize_button_position(*values: str | None) -> str:
+    for value in values:
+        normalized = clean_tracking_value(value).lower()
+        if not normalized:
+            continue
+        mapped = BUTTON_POSITION_ALIASES.get(normalized)
+        if mapped in VALID_BUTTON_POSITIONS:
+            return mapped
+    return "unknown"
+
+
+def get_default_tracking_params(product_type: str | None = None) -> dict[str, str]:
+    return {
+        "service_id": SERVICE_ID,
+        "product_type": normalize_product_type(product_type),
+        "utm_source": "",
+        "utm_medium": "",
+        "utm_campaign": "",
+        "utm_content": "",
+        "test_mode": "none",
+        "button_position": "unknown",
+    }
+
+
+def get_tracking_params_from_query() -> dict[str, str]:
+    params: dict[str, str] = {"service_id": SERVICE_ID}
+    product_type = get_query_param_value("product_type")
+    if product_type is not None:
+        params["product_type"] = normalize_product_type(product_type)
+
+    for key in UTM_PARAM_KEYS:
+        value = clean_tracking_value(get_query_param_value(key))
+        if value:
+            params[key] = value
+
+    test_mode = get_query_param_value("test_mode")
+    if test_mode is not None:
+        params["test_mode"] = normalize_test_mode(test_mode)
+
+    button_position = get_query_param_value("button_position")
+    button = get_query_param_value("button")
+    utm_content = get_query_param_value("utm_content")
+    if button_position is not None or button is not None or utm_content is not None:
+        params["button_position"] = normalize_button_position(
+            button_position,
+            button,
+            utm_content,
+        )
+    return params
+
+def get_tracking_params_from_session() -> dict[str, str]:
+    params = get_default_tracking_params(st.session_state.get("product_type"))
+    for key in TRACKING_PARAM_KEYS:
+        value = st.session_state.get(key)
+        if key == "service_id":
+            params[key] = SERVICE_ID
+        elif key == "product_type":
+            params[key] = normalize_product_type(str(value or ""))
+        elif key == "test_mode":
+            params[key] = normalize_test_mode(str(value or ""))
+        elif key == "button_position":
+            params[key] = normalize_button_position(str(value or ""))
+        else:
+            params[key] = clean_tracking_value(value)
+    return params
+
+
+def get_tracking_params_from_record(record: dict[str, Any] | None) -> dict[str, str]:
+    if not record:
+        return {}
+
+    params: dict[str, str] = {}
+    for key in TRACKING_PARAM_KEYS:
+        if key not in record:
+            continue
+        if key == "service_id":
+            params[key] = clean_tracking_value(record.get(key) or SERVICE_ID) or SERVICE_ID
+        elif key == "product_type":
+            params[key] = get_purchase_product_type(record)
+        elif key == "test_mode":
+            params[key] = normalize_test_mode(str(record.get(key) or ""))
+        elif key == "button_position":
+            params[key] = normalize_button_position(str(record.get(key) or ""))
+        else:
+            params[key] = clean_tracking_value(record.get(key))
+    return params
+
+def merge_tracking_params_by_priority(
+    *sources: dict[str, Any] | None,
+    product_type: str | None = None,
+) -> dict[str, str]:
+    merged = get_default_tracking_params(product_type)
+    for source in reversed([source or {} for source in sources]):
+        for key in TRACKING_PARAM_KEYS:
+            if key not in source:
+                continue
+            value = source.get(key)
+            if key == "service_id":
+                cleaned = clean_tracking_value(value) or SERVICE_ID
+            elif key == "product_type":
+                cleaned = normalize_product_type(str(value or ""))
+            elif key == "test_mode":
+                cleaned = normalize_test_mode(str(value or ""))
+            elif key == "button_position":
+                cleaned = normalize_button_position(str(value or ""))
+            else:
+                cleaned = clean_tracking_value(value)
+            if cleaned or key in {"service_id", "product_type", "test_mode", "button_position"}:
+                merged[key] = cleaned
+    merged["service_id"] = SERVICE_ID
+    merged["product_type"] = normalize_product_type(merged.get("product_type"))
+    merged["test_mode"] = normalize_test_mode(merged.get("test_mode"))
+    merged["button_position"] = normalize_button_position(merged.get("button_position"))
+    return merged
+
+
+def update_tracking_session_state(params: dict[str, Any] | None, *, overwrite_empty: bool = False) -> dict[str, str]:
+    current = get_tracking_params_from_session()
+    incoming = merge_tracking_params_by_priority(params, current)
+    for key, value in incoming.items():
+        if overwrite_empty or value or key in {"service_id", "product_type", "test_mode", "button_position"}:
+            st.session_state[key] = value
+    return get_tracking_params_from_session()
+
+
+def update_tracking_session_state_from_query() -> dict[str, str]:
+    return update_tracking_session_state(get_tracking_params_from_query(), overwrite_empty=False)
+
+
+def tracking_params_for_storage(product_type: str | None = None) -> dict[str, str]:
+    params = get_tracking_params_from_session()
+    params["product_type"] = normalize_product_type(product_type or params.get("product_type"))
+    params["service_id"] = SERVICE_ID
+    return params
+
+
+def get_utm_params() -> dict[str, str]:
+    params = get_tracking_params_from_session()
+    return {key: params[key] for key in UTM_PARAM_KEYS if params.get(key)}
 
 def has_purchase_return_query_params() -> bool:
     return any(
@@ -385,33 +561,41 @@ def get_checkout_price_type(product_type: str, price_id: str) -> str:
 
 
 def build_checkout_success_url(purchase_id: str, access_token: str, product_type: str) -> str:
+    tracking_params = tracking_params_for_storage(product_type)
+    query_params = {
+        "purchase_id": purchase_id,
+        "access_token": access_token,
+        "product_type": normalize_product_type(product_type),
+        **{
+            key: value
+            for key, value in tracking_params.items()
+            if key in {*UTM_PARAM_KEYS, "test_mode", "button_position"} and value
+        },
+    }
     query_parts = [
         "session_id={CHECKOUT_SESSION_ID}",
-        urllib.parse.urlencode(
-            {
-                "purchase_id": purchase_id,
-                "access_token": access_token,
-                "product_type": normalize_product_type(product_type),
-            }
-        ),
+        urllib.parse.urlencode(query_params),
     ]
-    utm_params = get_utm_params()
-    if utm_params:
-        query_parts.append(urllib.parse.urlencode(utm_params))
     return f"{APP_BASE_URL}/?{'&'.join(query_parts)}"
-
 
 def track_ga4_event(
     event_name: str,
     logger: logging.Logger,
     params: dict[str, Any] | None = None,
 ) -> bool:
+    tracking_params = get_tracking_params_from_session()
     event_params = {
         "page_location": get_page_location(),
-        **get_utm_params(),
+        **tracking_params,
     }
     if params:
         event_params.update(params)
+    event_params["service_id"] = SERVICE_ID
+    event_params["product_type"] = normalize_product_type(event_params.get("product_type"))
+    event_params["test_mode"] = normalize_test_mode(str(event_params.get("test_mode") or ""))
+    event_params["button_position"] = normalize_button_position(
+        str(event_params.get("button_position") or "")
+    )
 
     return send_ga4_event(
         event_name=event_name,
@@ -422,7 +606,6 @@ def track_ga4_event(
         params=event_params,
         logger=logger,
     )
-
 
 def track_streamlit_page_view(logger: logging.Logger, product_type: str) -> None:
     page_location = get_page_location()
@@ -518,6 +701,7 @@ def create_purchase_record(
     access_token = secrets.token_urlsafe(24)
     token_expires_at = token_expires_at_datetime()
     product_type = normalize_product_type(product_type)
+    tracking_params = tracking_params_for_storage(product_type)
 
     firestore_create_purchase_record(
         purchase_id=purchase_id,
@@ -530,6 +714,7 @@ def create_purchase_record(
         amount_jpy=amount_jpy,
         currency="jpy",
         source="wix_lp",
+        tracking_params=tracking_params,
     )
 
     record = update_purchase_record(
@@ -542,7 +727,6 @@ def create_purchase_record(
     record = record or {}
     record["_access_token"] = access_token
     return record
-
 
 def get_purchase_record(purchase_id: str | None) -> dict[str, Any] | None:
     if not purchase_id:
@@ -566,6 +750,56 @@ def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] |
     refreshed = _purchase_doc_ref(purchase_id).get()
     return refreshed.to_dict() if refreshed.exists else None
 
+
+def get_tracking_params_from_metadata(metadata: Any | None) -> dict[str, str]:
+    if not metadata or not hasattr(metadata, "get"):
+        return {}
+    return {
+        key: metadata.get(key)
+        for key in TRACKING_PARAM_KEYS
+        if metadata.get(key) is not None
+    }
+
+
+def get_tracking_params_from_current_url() -> dict[str, str]:
+    params = get_tracking_params_from_query()
+    return {
+        key: value
+        for key, value in params.items()
+        if value or key in {"service_id", "product_type", "test_mode", "button_position"}
+    }
+
+
+def restore_tracking_params(
+    record: dict[str, Any] | None,
+    metadata: Any | None = None,
+) -> dict[str, str]:
+    record_params = get_tracking_params_from_record(record)
+    metadata_params = get_tracking_params_from_metadata(metadata)
+    url_params = get_tracking_params_from_current_url()
+    session_params = get_tracking_params_from_session()
+    restored = merge_tracking_params_by_priority(
+        record_params,
+        metadata_params,
+        url_params,
+        session_params,
+        product_type=get_purchase_product_type(record),
+    )
+    update_tracking_session_state(restored, overwrite_empty=True)
+    return restored
+
+
+def with_restored_tracking_params(
+    record: dict[str, Any] | None,
+    metadata: Any | None = None,
+) -> dict[str, Any] | None:
+    if not record:
+        return None
+    restored = restore_tracking_params(record, metadata)
+    merged_record = dict(record)
+    for key, value in restored.items():
+        merged_record.setdefault(key, value)
+    return merged_record
 
 def is_token_valid(record: dict[str, Any] | None) -> bool:
     if not record:
@@ -621,6 +855,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
     price_type = get_checkout_price_type(product_type, active_price_id)
     record = create_purchase_record(active_price_id, active_amount_jpy, product_type, price_type)
     purchase_id = record["purchase_id"]
+    tracking_params = tracking_params_for_storage(product_type)
 
     try:
         assert stripe is not None
@@ -646,6 +881,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
                 "price_type": price_type,
                 "price_id": active_price_id,
                 "amount_jpy": str(active_amount_jpy),
+                **{key: str(value) for key, value in tracking_params.items()},
             },
         )
         update_purchase_record(
@@ -730,7 +966,7 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
                 "payment_status": getattr(session, "payment_status", None),
             },
         )
-    return record
+    return with_restored_tracking_params(record, metadata)
 
 
 def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
@@ -2057,6 +2293,7 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
     init_session_state()
+    update_tracking_session_state_from_query()
 
     purchase_return_requested = has_purchase_return_query_params()
     direct_checkout_requested = is_direct_checkout_request()
