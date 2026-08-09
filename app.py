@@ -283,6 +283,8 @@ def init_session_state() -> None:
         st.session_state.checkout_product_type = None
     if "ga4_client_id" not in st.session_state:
         st.session_state.ga4_client_id = secrets.token_urlsafe(16)
+    if "ga4_session_id" not in st.session_state:
+    st.session_state.ga4_session_id = None
     if "ga4_page_view_locations" not in st.session_state:
         st.session_state.ga4_page_view_locations = set()
     if "ga4_form_displayed_purchase_ids" not in st.session_state:
