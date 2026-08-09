@@ -235,6 +235,8 @@ def test_success_url_includes_tracking_params(monkeypatch):
     assert "utm_content=hero" in url
     assert "test_mode=owner" in url
     assert "button_position=top" in url
+    assert "ga4_client_id" not in url
+    assert "ga4_session_id" not in url
 
 
 def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monkeypatch):
@@ -366,3 +368,105 @@ def test_track_purchase_ga4_event_once_does_not_mark_when_ga4_fails(monkeypatch)
 
     assert sent is False
     assert calls == []
+def test_track_ga4_event_passes_wix_client_and_session_ids(monkeypatch):
+    captured = {}
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="wix",
+            utm_medium="lp",
+            utm_campaign="summer",
+            utm_content="hero",
+            test_mode="owner",
+            button_position="top",
+            ga4_client_id="1498719245.1765352125",
+            ga4_session_id="1786245136",
+        ),
+        query_params={
+            "session_id": "cs_test_1",
+            "ga4_client_id": "1498719245.1765352125",
+            "ga4_session_id": "1786245136",
+            "utm_source": "wix",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "GA4_ENABLED", True)
+    monkeypatch.setattr(app, "GA4_MEASUREMENT_ID", "G-TEST")
+    monkeypatch.setattr(app, "GA4_API_SECRET", "secret")
+
+    def fake_send_ga4_event(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(app, "send_ga4_event", fake_send_ga4_event)
+
+    sent = app.track_ga4_event("checkout_session_created", SimpleNamespace())
+
+    assert sent is True
+    assert captured["client_id"] == "1498719245.1765352125"
+    assert captured["session_id"] == "1786245136"
+    assert captured["params"]["utm_source"] == "wix"
+    assert "cs_test_1" not in captured["params"]["page_location"]
+    assert "ga4_client_id" not in captured["params"]["page_location"]
+    assert "ga4_session_id" not in captured["params"]["page_location"]
+
+def test_ga4_identifiers_from_query_are_separate_from_tracking(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(ga4_client_id="fallback-client", ga4_session_id=None),
+        query_params={
+            "ga4_client_id": "1498719245.1765352125",
+            "ga4_session_id": "1786245136",
+            "session_id": "cs_test_1",
+            "utm_source": "wix",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    app.update_ga4_identifiers_from_query()
+    tracking_params = app.get_tracking_params_from_query()
+
+    assert streamlit_stub.session_state.ga4_client_id == "1498719245.1765352125"
+    assert streamlit_stub.session_state.ga4_session_id == "1786245136"
+    assert "ga4_client_id" not in tracking_params
+    assert "ga4_session_id" not in tracking_params
+    assert "session_id" not in tracking_params
+    assert tracking_params["utm_source"] == "wix"
+
+
+def test_ga4_identifiers_keep_existing_fallback_when_query_missing(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(ga4_client_id="fallback-client", ga4_session_id=None),
+        query_params={"session_id": "cs_test_1"},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    app.update_ga4_identifiers_from_query()
+
+    assert streamlit_stub.session_state.ga4_client_id == "fallback-client"
+    assert streamlit_stub.session_state.ga4_session_id is None
+
+
+def test_success_url_includes_ga4_identifiers_when_present(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="instagram",
+            utm_medium="paid_social",
+            utm_campaign="summer",
+            utm_content="hero",
+            test_mode="owner",
+            button_position="top",
+            ga4_client_id="1498719245.1765352125",
+            ga4_session_id="1786245136",
+        ),
+        query_params={},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    url = app.build_checkout_success_url("p_1", "token_1", "review")
+
+    assert "session_id={CHECKOUT_SESSION_ID}" in url
+    assert "ga4_client_id=1498719245.1765352125" in url
+    assert "ga4_session_id=1786245136" in url

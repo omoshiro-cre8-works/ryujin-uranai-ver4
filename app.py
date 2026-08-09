@@ -145,6 +145,7 @@ BUTTON_POSITION_ALIASES = {
     "bottom": "bottom",
 }
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
+GA4_IDENTIFIER_QUERY_PARAMS = {"ga4_client_id", "ga4_session_id"}
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
     "REGULAR_COMPLETION_ILLUSTRATION",
@@ -284,7 +285,7 @@ def init_session_state() -> None:
     if "ga4_client_id" not in st.session_state:
         st.session_state.ga4_client_id = secrets.token_urlsafe(16)
     if "ga4_session_id" not in st.session_state:
-    st.session_state.ga4_session_id = None
+        st.session_state.ga4_session_id = None
     if "ga4_page_view_locations" not in st.session_state:
         st.session_state.ga4_page_view_locations = set()
     if "ga4_form_displayed_purchase_ids" not in st.session_state:
@@ -382,6 +383,16 @@ def get_tracking_params_from_query() -> dict[str, str]:
             utm_content,
         )
     return params
+
+
+def update_ga4_identifiers_from_query() -> None:
+    ga4_client_id = clean_tracking_value(get_query_param_value("ga4_client_id"))
+    if ga4_client_id:
+        st.session_state.ga4_client_id = ga4_client_id
+
+    ga4_session_id = clean_tracking_value(get_query_param_value("ga4_session_id"))
+    if ga4_session_id:
+        st.session_state.ga4_session_id = ga4_session_id
 
 def get_tracking_params_from_session() -> dict[str, str]:
     params = get_default_tracking_params(st.session_state.get("product_type"))
@@ -545,6 +556,7 @@ def sanitize_page_location_for_ga4(
         key: value
         for key, value in query_params.items()
         if key not in GA4_SENSITIVE_QUERY_PARAMS
+        and key not in GA4_IDENTIFIER_QUERY_PARAMS
     }
     query_string = urllib.parse.urlencode(safe_query_params)
     return f"{APP_BASE_URL}/?{query_string}" if query_string else f"{APP_BASE_URL}/"
@@ -576,6 +588,12 @@ def build_checkout_success_url(purchase_id: str, access_token: str, product_type
             if key in {*UTM_PARAM_KEYS, "test_mode", "button_position"} and value
         },
     }
+    ga4_client_id = clean_tracking_value(st.session_state.get("ga4_client_id"))
+    if ga4_client_id:
+        query_params["ga4_client_id"] = ga4_client_id
+    ga4_session_id = clean_tracking_value(st.session_state.get("ga4_session_id"))
+    if ga4_session_id:
+        query_params["ga4_session_id"] = ga4_session_id
     query_parts = [
         "session_id={CHECKOUT_SESSION_ID}",
         urllib.parse.urlencode(query_params),
@@ -608,6 +626,7 @@ def track_ga4_event(
         api_secret=GA4_API_SECRET,
         enabled=GA4_ENABLED,
         params=event_params,
+        session_id=st.session_state.get("ga4_session_id"),
         logger=logger,
     )
 
@@ -2340,6 +2359,7 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
     init_session_state()
+    update_ga4_identifiers_from_query()
     update_tracking_session_state_from_query()
 
     purchase_return_requested = has_purchase_return_query_params()
@@ -2395,7 +2415,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-

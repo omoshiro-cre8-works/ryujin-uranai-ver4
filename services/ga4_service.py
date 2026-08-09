@@ -26,6 +26,7 @@ def send_ga4_event(
     api_secret: str,
     enabled: bool | str | None,
     params: dict[str, Any] | None = None,
+    session_id: str | int | None = None,
     logger: logging.Logger | None = None,
     timeout_seconds: float = 2.0,
 ) -> bool:
@@ -39,6 +40,9 @@ def send_ga4_event(
         return False
 
     clean_params = _clean_event_params(params or {})
+    clean_session_id = _clean_session_id(session_id)
+    if clean_session_id is not None:
+        clean_params["session_id"] = clean_session_id
     payload = {
         "client_id": client_id,
         "events": [
@@ -83,3 +87,13 @@ def _clean_event_params(params: dict[str, Any]) -> dict[str, Any]:
         else:
             clean_params[key] = str(value)[:GA4_PARAM_VALUE_MAX_LENGTH]
     return clean_params
+
+def _clean_session_id(session_id: str | int | None) -> int | str | None:
+    if session_id is None:
+        return None
+    cleaned = str(session_id).strip()
+    if not cleaned:
+        return None
+    if cleaned.isdecimal():
+        return int(cleaned)
+    return cleaned[:GA4_PARAM_VALUE_MAX_LENGTH]
