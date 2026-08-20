@@ -199,10 +199,25 @@ def test_tracking_param_invalid_values_fall_back(monkeypatch):
     assert params["button_position"] == "unknown"
 
 
+def test_tracking_param_sample_bottom_is_kept_from_query(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "button_position": "sample_bottom",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.get_tracking_params_from_query()
+
+    assert params["button_position"] == "sample_bottom"
+
+
 def test_button_position_legacy_aliases():
     assert app.normalize_button_position("top") == "top"
     assert app.normalize_button_position("middle") == "middle"
     assert app.normalize_button_position("bottom") == "bottom"
+    assert app.normalize_button_position("sample_bottom") == "sample_bottom"
     assert app.normalize_button_position("sample_after") == "middle"
     assert app.normalize_button_position("sumple_after") == "middle"
     assert app.normalize_button_position("unknown_value") == "unknown"
@@ -237,6 +252,27 @@ def test_success_url_includes_tracking_params(monkeypatch):
     assert "button_position=top" in url
     assert "ga4_client_id" not in url
     assert "ga4_session_id" not in url
+
+
+def test_tracking_params_for_storage_keeps_sample_bottom(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="wix",
+            utm_medium="lp",
+            utm_campaign="sample",
+            utm_content="sample_popup",
+            test_mode="none",
+            button_position="sample_bottom",
+        ),
+        query_params={},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.tracking_params_for_storage("review")
+
+    assert params["button_position"] == "sample_bottom"
 
 
 def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monkeypatch):
@@ -291,6 +327,50 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
     assert metadata["utm_source"] == "instagram"
     assert metadata["test_mode"] == "owner"
     assert metadata["button_position"] == "top"
+
+
+def test_create_checkout_session_keeps_sample_bottom_in_metadata(monkeypatch):
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id="cs_test_1", url="https://checkout.example/session")
+
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="wix",
+            utm_medium="lp",
+            utm_campaign="sample",
+            utm_content="sample_popup",
+            test_mode="none",
+            button_position="sample_bottom",
+        ),
+    )
+    stripe_stub = SimpleNamespace(
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 680))
+    monkeypatch.setattr(
+        app,
+        "create_purchase_record",
+        lambda price_id, amount_jpy, product_type, price_type: {
+            "purchase_id": "p_1",
+            "_access_token": "token_1",
+        },
+    )
+    monkeypatch.setattr(app, "update_purchase_record", lambda purchase_id, **updates: {})
+    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: True)
+
+    checkout_url, error = app.create_checkout_session("review", SimpleNamespace(info=lambda *args, **kwargs: None))
+
+    assert error is None
+    assert checkout_url == "https://checkout.example/session"
+    assert captured["metadata"]["button_position"] == "sample_bottom"
 
 
 def test_track_purchase_ga4_event_once_sends_and_marks(monkeypatch):
@@ -410,6 +490,41 @@ def test_track_ga4_event_passes_wix_client_and_session_ids(monkeypatch):
     assert "cs_test_1" not in captured["params"]["page_location"]
     assert "ga4_client_id" not in captured["params"]["page_location"]
     assert "ga4_session_id" not in captured["params"]["page_location"]
+
+
+def test_track_ga4_event_keeps_sample_bottom(monkeypatch):
+    captured = {}
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="review",
+            utm_source="wix",
+            utm_medium="lp",
+            utm_campaign="sample",
+            utm_content="sample_popup",
+            test_mode="none",
+            button_position="sample_bottom",
+            ga4_client_id="1498719245.1765352125",
+            ga4_session_id="1786245136",
+        ),
+        query_params={},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "GA4_ENABLED", True)
+    monkeypatch.setattr(app, "GA4_MEASUREMENT_ID", "G-TEST")
+    monkeypatch.setattr(app, "GA4_API_SECRET", "secret")
+
+    def fake_send_ga4_event(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(app, "send_ga4_event", fake_send_ga4_event)
+
+    sent = app.track_ga4_event("checkout_session_created", SimpleNamespace())
+
+    assert sent is True
+    assert captured["params"]["button_position"] == "sample_bottom"
+
 
 def test_ga4_identifiers_from_query_are_separate_from_tracking(monkeypatch):
     streamlit_stub = SimpleNamespace(

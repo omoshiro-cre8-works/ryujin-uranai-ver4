@@ -134,7 +134,7 @@ TRACKING_PARAM_KEYS = (
 )
 UTM_PARAM_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
 VALID_TEST_MODES = {"owner", "none"}
-VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "unknown"}
+VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "sample_bottom", "unknown"}
 BUTTON_POSITION_ALIASES = {
     "first_view": "top",
     "hero": "top",
@@ -143,6 +143,7 @@ BUTTON_POSITION_ALIASES = {
     "sumple_after": "middle",
     "middle": "middle",
     "bottom": "bottom",
+    "sample_bottom": "sample_bottom",
 }
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 GA4_IDENTIFIER_QUERY_PARAMS = {"ga4_client_id", "ga4_session_id"}

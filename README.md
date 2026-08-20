@@ -445,12 +445,12 @@ utm_medium
 utm_campaign
 utm_content
 test_mode=owner|none
-button_position=top|middle|bottom|unknown
-button=top|middle|bottom|first_view|hero|sample_after|sumple_after
+button_position=top|middle|bottom|sample_bottom|unknown
+button=top|middle|bottom|sample_bottom|first_view|hero|sample_after|sumple_after
 product_type=regular|review
 ```
 
-`button_position` は `button_position`、`button`、既存 `utm_content` の順で補完され、保存値は `top` / `middle` / `bottom` / `unknown` に正規化されます。`test_mode` は分析用ラベルで、認証・決済・利用権判定には使用しません。
+`button_position` は `button_position`、`button`、既存 `utm_content` の順で補完され、保存値は `top` / `middle` / `bottom` / `sample_bottom` / `unknown` に正規化されます。`sample_bottom` はサンプルポップアップ内の購入CTAを表します。`test_mode` は分析用ラベルで、認証・決済・利用権判定には使用しません。
 
 ### GA4第2段階イベント
 
