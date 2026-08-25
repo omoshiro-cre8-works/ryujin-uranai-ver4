@@ -223,6 +223,210 @@ def test_button_position_legacy_aliases():
     assert app.normalize_button_position("unknown_value") == "unknown"
 
 
+def test_lp_value_normalization_rules():
+    assert app.normalize_lp_value("lp_d") == "lp_d"
+    assert app.normalize_lp_value("lp_campaign_01") == "lp_campaign_01"
+    assert app.normalize_lp_value("direct_or_unknown") == "direct_or_unknown"
+    assert app.normalize_lp_value("lp_") == "direct_or_unknown"
+    assert app.normalize_lp_value("LP_D") == "lp_d"
+    assert app.normalize_lp_value("lp-campaign") == "direct_or_unknown"
+    assert app.normalize_lp_value("/ai-uranai") == "direct_or_unknown"
+    assert app.normalize_lp_value("lp_" + "a" * 29) == "lp_" + "a" * 29
+    assert app.normalize_lp_value("lp_" + "a" * 30) == "direct_or_unknown"
+    assert app.normalize_lp_value("lp_d\x00") == "lp_d"
+
+
+def test_query_builds_entry_fields_from_new_params(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "entry_lp": "lp_d",
+            "entry_utm_source": "instagram",
+            "entry_utm_medium": "paid_social",
+            "entry_utm_campaign": "summer",
+            "entry_utm_content": "lp_d_ad",
+            "current_lp": "lp_a",
+            "utm_content": "lp_a",
+            "button_position": "bottom",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.get_tracking_params_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["entry_utm_medium"] == "paid_social"
+    assert params["entry_utm_campaign"] == "summer"
+    assert params["entry_utm_content"] == "lp_d_ad"
+    assert params["current_lp"] == "lp_a"
+    assert params["utm_content"] == "lp_a"
+    assert params["button_position"] == "bottom"
+
+
+def test_legacy_url_derives_entry_and_current_lp_from_utm_content(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "utm_source": "instagram",
+            "utm_medium": "paid_social",
+            "utm_campaign": "summer",
+            "utm_content": "lp_d",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.get_tracking_params_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["current_lp"] == "lp_d"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["entry_utm_medium"] == "paid_social"
+    assert params["entry_utm_campaign"] == "summer"
+    assert params["entry_utm_content"] == "lp_d"
+
+
+def test_direct_or_unknown_does_not_overwrite_existing_entry_lp(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="regular",
+            utm_source="",
+            utm_medium="",
+            utm_campaign="",
+            utm_content="",
+            entry_lp="lp_d",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="summer",
+            entry_utm_content="lp_d_ad",
+            current_lp="lp_d",
+            test_mode="none",
+            button_position="top",
+        ),
+        query_params={
+            "entry_lp": "direct_or_unknown",
+            "current_lp": "lp_a",
+            "button_position": "bottom",
+            "utm_content": "lp_a",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.update_tracking_session_state_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["current_lp"] == "lp_a"
+    assert params["button_position"] == "bottom"
+    assert params["utm_content"] == "lp_a"
+
+
+def test_legacy_lp_a_does_not_overwrite_existing_entry_lp(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="regular",
+            utm_source="instagram",
+            utm_medium="paid_social",
+            utm_campaign="summer",
+            utm_content="lp_d_ad",
+            entry_lp="lp_d",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="summer",
+            entry_utm_content="lp_d_ad",
+            current_lp="lp_d",
+            test_mode="none",
+            button_position="top",
+        ),
+        query_params={
+            "utm_source": "instagram",
+            "utm_medium": "paid_social",
+            "utm_campaign": "canonical",
+            "utm_content": "lp_a",
+            "current_lp": "lp_a",
+            "button_position": "bottom",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.update_tracking_session_state_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["entry_utm_campaign"] == "summer"
+    assert params["current_lp"] == "lp_a"
+    assert params["utm_content"] == "lp_a"
+    assert params["utm_campaign"] == "canonical"
+    assert params["button_position"] == "bottom"
+
+
+def test_missing_entry_lp_does_not_overwrite_existing_entry_lp(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            entry_lp="lp_e",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="autumn",
+            entry_utm_content="lp_e_ad",
+            current_lp="lp_e",
+        ),
+        query_params={
+            "current_lp": "lp_a",
+            "button_position": "middle",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.update_tracking_session_state_from_query()
+
+    assert params["entry_lp"] == "lp_e"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["current_lp"] == "lp_a"
+    assert params["button_position"] == "middle"
+
+
+def test_explicit_valid_entry_lp_overwrites_direct_or_unknown(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(entry_lp="direct_or_unknown", current_lp="direct_or_unknown"),
+        query_params={
+            "entry_lp": "lp_d",
+            "entry_utm_source": "instagram",
+            "entry_utm_medium": "paid_social",
+            "entry_utm_campaign": "summer",
+            "current_lp": "lp_d",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.update_tracking_session_state_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["current_lp"] == "lp_d"
+
+
+def test_missing_session_entry_lp_adopts_legacy_utm_content(monkeypatch):
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(),
+        query_params={
+            "utm_source": "instagram",
+            "utm_medium": "paid_social",
+            "utm_campaign": "summer",
+            "utm_content": "lp_d",
+            "button_position": "top",
+        },
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    params = app.update_tracking_session_state_from_query()
+
+    assert params["entry_lp"] == "lp_d"
+    assert params["current_lp"] == "lp_d"
+    assert params["entry_utm_source"] == "instagram"
+    assert params["button_position"] == "top"
+
+
 def test_success_url_includes_tracking_params(monkeypatch):
     streamlit_stub = SimpleNamespace(
         session_state=AttrDict(
@@ -232,8 +436,19 @@ def test_success_url_includes_tracking_params(monkeypatch):
             utm_medium="paid_social",
             utm_campaign="summer",
             utm_content="hero",
+            entry_lp="lp_d",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="summer",
+            entry_utm_content="lp_d_ad",
+            current_lp="lp_a",
             test_mode="owner",
             button_position="top",
+            ga4_client_id_received=True,
+            ga4_session_id_received=True,
+            ga4_client_id_source="wix",
+            ga4_session_linkable=True,
+            ga4_checkout_request_status="not_attempted",
         ),
         query_params={},
     )
@@ -248,10 +463,17 @@ def test_success_url_includes_tracking_params(monkeypatch):
     assert "utm_medium=paid_social" in url
     assert "utm_campaign=summer" in url
     assert "utm_content=hero" in url
+    assert "entry_lp=lp_d" in url
+    assert "entry_utm_source=instagram" in url
+    assert "entry_utm_medium=paid_social" in url
+    assert "entry_utm_campaign=summer" in url
+    assert "entry_utm_content=lp_d_ad" in url
+    assert "current_lp=lp_a" in url
     assert "test_mode=owner" in url
     assert "button_position=top" in url
     assert "ga4_client_id" not in url
     assert "ga4_session_id" not in url
+    assert "ga4_client_id_received" not in url
 
 
 def test_tracking_params_for_storage_keeps_sample_bottom(monkeypatch):
@@ -263,8 +485,19 @@ def test_tracking_params_for_storage_keeps_sample_bottom(monkeypatch):
             utm_medium="lp",
             utm_campaign="sample",
             utm_content="sample_popup",
+            entry_lp="lp_e",
+            entry_utm_source="wix",
+            entry_utm_medium="lp",
+            entry_utm_campaign="sample",
+            entry_utm_content="sample_popup",
+            current_lp="lp_e",
             test_mode="none",
             button_position="sample_bottom",
+            ga4_client_id_received=True,
+            ga4_session_id_received=True,
+            ga4_client_id_source="wix",
+            ga4_session_linkable=True,
+            ga4_checkout_request_status="not_attempted",
         ),
         query_params={},
     )
@@ -273,6 +506,10 @@ def test_tracking_params_for_storage_keeps_sample_bottom(monkeypatch):
     params = app.tracking_params_for_storage("review")
 
     assert params["button_position"] == "sample_bottom"
+    assert params["entry_lp"] == "lp_e"
+    assert params["current_lp"] == "lp_e"
+    assert params["ga4_client_id_received"] is True
+    assert params["ga4_session_linkable"] is True
 
 
 def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monkeypatch):
@@ -290,8 +527,21 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
             utm_medium="paid_social",
             utm_campaign="summer",
             utm_content="hero",
+            entry_lp="lp_d",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="summer",
+            entry_utm_content="lp_d_ad",
+            current_lp="lp_a",
             test_mode="owner",
             button_position="top",
+            ga4_client_id="1498719245.1765352125",
+            ga4_session_id="1786245136",
+            ga4_client_id_received=True,
+            ga4_session_id_received=True,
+            ga4_client_id_source="wix",
+            ga4_session_linkable=True,
+            ga4_checkout_request_status="not_attempted",
         ),
     )
     stripe_stub = SimpleNamespace(
@@ -310,7 +560,11 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
         },
     )
     monkeypatch.setattr(app, "update_purchase_record", lambda purchase_id, **updates: {})
-    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        app,
+        "track_ga4_event_with_status",
+        lambda *args, **kwargs: {"sent": True, "status": "request_accepted"},
+    )
 
     checkout_url, error = app.create_checkout_session("review", SimpleNamespace(info=lambda *args, **kwargs: None))
 
@@ -325,8 +579,18 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
     assert metadata["amount_jpy"] == "680"
     assert metadata["service_id"] == "ryujin"
     assert metadata["utm_source"] == "instagram"
+    assert metadata["entry_lp"] == "lp_d"
+    assert metadata["entry_utm_source"] == "instagram"
+    assert metadata["entry_utm_medium"] == "paid_social"
+    assert metadata["entry_utm_campaign"] == "summer"
+    assert metadata["entry_utm_content"] == "lp_d_ad"
+    assert metadata["current_lp"] == "lp_a"
     assert metadata["test_mode"] == "owner"
     assert metadata["button_position"] == "top"
+    assert "ga4_client_id" not in metadata
+    assert "ga4_session_id" not in metadata
+    assert "ga4_client_id_received" not in metadata
+    assert "ga4_checkout_request_status" not in metadata
 
 
 def test_create_checkout_session_keeps_sample_bottom_in_metadata(monkeypatch):
@@ -344,8 +608,19 @@ def test_create_checkout_session_keeps_sample_bottom_in_metadata(monkeypatch):
             utm_medium="lp",
             utm_campaign="sample",
             utm_content="sample_popup",
+            entry_lp="lp_e",
+            entry_utm_source="wix",
+            entry_utm_medium="lp",
+            entry_utm_campaign="sample",
+            entry_utm_content="sample_popup",
+            current_lp="lp_e",
             test_mode="none",
             button_position="sample_bottom",
+            ga4_client_id_received=True,
+            ga4_session_id_received=True,
+            ga4_client_id_source="wix",
+            ga4_session_linkable=True,
+            ga4_checkout_request_status="not_attempted",
         ),
     )
     stripe_stub = SimpleNamespace(
@@ -364,13 +639,93 @@ def test_create_checkout_session_keeps_sample_bottom_in_metadata(monkeypatch):
         },
     )
     monkeypatch.setattr(app, "update_purchase_record", lambda purchase_id, **updates: {})
-    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        app,
+        "track_ga4_event_with_status",
+        lambda *args, **kwargs: {"sent": True, "status": "request_accepted"},
+    )
 
     checkout_url, error = app.create_checkout_session("review", SimpleNamespace(info=lambda *args, **kwargs: None))
 
     assert error is None
     assert checkout_url == "https://checkout.example/session"
     assert captured["metadata"]["button_position"] == "sample_bottom"
+    assert captured["metadata"]["entry_lp"] == "lp_e"
+    assert captured["metadata"]["current_lp"] == "lp_e"
+
+
+def test_checkout_ga4_status_update_failure_does_not_block_checkout(monkeypatch):
+    captured = {}
+    warnings = []
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id="cs_test_1", url="https://checkout.example/session")
+
+    def fake_update_purchase_record(purchase_id, **updates):
+        if "ga4_checkout_request_status" in updates:
+            raise RuntimeError("firestore unavailable")
+        return {}
+
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="regular",
+            utm_source="",
+            utm_medium="",
+            utm_campaign="",
+            utm_content="lp_e",
+            entry_lp="lp_e",
+            entry_utm_source="",
+            entry_utm_medium="",
+            entry_utm_campaign="",
+            entry_utm_content="",
+            current_lp="lp_e",
+            test_mode="none",
+            button_position="sample_bottom",
+            ga4_client_id="fallback-client",
+            ga4_session_id=None,
+            ga4_client_id_received=False,
+            ga4_session_id_received=False,
+            ga4_client_id_source="generated",
+            ga4_session_linkable=False,
+            ga4_checkout_request_status="not_attempted",
+        ),
+        query_params={},
+    )
+    stripe_stub = SimpleNamespace(
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=fake_create))
+    )
+    logger = SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_regular", 300))
+    monkeypatch.setattr(
+        app,
+        "create_purchase_record",
+        lambda price_id, amount_jpy, product_type, price_type: {
+            "purchase_id": "p_1",
+            "_access_token": "token_1",
+        },
+    )
+    monkeypatch.setattr(app, "update_purchase_record", fake_update_purchase_record)
+    monkeypatch.setattr(
+        app,
+        "track_ga4_event_with_status",
+        lambda *args, **kwargs: {"sent": False, "status": "transport_failed"},
+    )
+
+    checkout_url, error = app.create_checkout_session("regular", logger)
+
+    assert error is None
+    assert checkout_url == "https://checkout.example/session"
+    assert captured["metadata"]["button_position"] == "sample_bottom"
+    assert streamlit_stub.session_state.ga4_checkout_request_status == "transport_failed"
+    assert warnings
 
 
 def test_track_purchase_ga4_event_once_sends_and_marks(monkeypatch):
@@ -477,9 +832,9 @@ def test_track_ga4_event_passes_wix_client_and_session_ids(monkeypatch):
 
     def fake_send_ga4_event(**kwargs):
         captured.update(kwargs)
-        return True
+        return {"sent": True, "status": "request_accepted"}
 
-    monkeypatch.setattr(app, "send_ga4_event", fake_send_ga4_event)
+    monkeypatch.setattr(app, "send_ga4_event_with_status", fake_send_ga4_event)
 
     sent = app.track_ga4_event("checkout_session_created", SimpleNamespace())
 
@@ -516,14 +871,66 @@ def test_track_ga4_event_keeps_sample_bottom(monkeypatch):
 
     def fake_send_ga4_event(**kwargs):
         captured.update(kwargs)
-        return True
+        return {"sent": True, "status": "request_accepted"}
 
-    monkeypatch.setattr(app, "send_ga4_event", fake_send_ga4_event)
+    monkeypatch.setattr(app, "send_ga4_event_with_status", fake_send_ga4_event)
 
     sent = app.track_ga4_event("checkout_session_created", SimpleNamespace())
 
     assert sent is True
     assert captured["params"]["button_position"] == "sample_bottom"
+
+
+def test_track_ga4_event_adds_entry_current_and_observation_params(monkeypatch):
+    captured = {}
+    streamlit_stub = SimpleNamespace(
+        session_state=AttrDict(
+            service_id="ryujin",
+            product_type="regular",
+            utm_source="instagram",
+            utm_medium="paid_social",
+            utm_campaign="summer",
+            utm_content="lp_a",
+            entry_lp="lp_d",
+            entry_utm_source="instagram",
+            entry_utm_medium="paid_social",
+            entry_utm_campaign="summer",
+            entry_utm_content="lp_d_ad",
+            current_lp="lp_a",
+            test_mode="owner",
+            button_position="bottom",
+            ga4_client_id="1498719245.1765352125",
+            ga4_session_id="1786245136",
+            ga4_client_id_received=True,
+            ga4_session_id_received=True,
+            ga4_client_id_source="wix",
+            ga4_session_linkable=True,
+            ga4_checkout_request_status="not_attempted",
+        ),
+        query_params={},
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    def fake_send_ga4_event(**kwargs):
+        captured.update(kwargs)
+        return {"sent": True, "status": "request_accepted"}
+
+    monkeypatch.setattr(app, "send_ga4_event_with_status", fake_send_ga4_event)
+
+    result = app.track_ga4_event_with_status("checkout_session_created", SimpleNamespace())
+
+    assert result["status"] == "request_accepted"
+    params = captured["params"]
+    assert params["entry_lp"] == "lp_d"
+    assert params["current_lp"] == "lp_a"
+    assert params["button_position"] == "bottom"
+    assert params["ga4_client_id_received"] is True
+    assert params["ga4_session_id_received"] is True
+    assert params["ga4_client_id_source"] == "wix"
+    assert params["ga4_session_linkable"] is True
+    assert params["ga4_checkout_request_status"] == "not_attempted"
+    assert "ga4_client_id" not in params
+    assert "ga4_session_id" not in params
 
 
 def test_ga4_identifiers_from_query_are_separate_from_tracking(monkeypatch):
@@ -543,6 +950,10 @@ def test_ga4_identifiers_from_query_are_separate_from_tracking(monkeypatch):
 
     assert streamlit_stub.session_state.ga4_client_id == "1498719245.1765352125"
     assert streamlit_stub.session_state.ga4_session_id == "1786245136"
+    assert streamlit_stub.session_state.ga4_client_id_received is True
+    assert streamlit_stub.session_state.ga4_session_id_received is True
+    assert streamlit_stub.session_state.ga4_client_id_source == "wix"
+    assert streamlit_stub.session_state.ga4_session_linkable is True
     assert "ga4_client_id" not in tracking_params
     assert "ga4_session_id" not in tracking_params
     assert "session_id" not in tracking_params
@@ -560,6 +971,10 @@ def test_ga4_identifiers_keep_existing_fallback_when_query_missing(monkeypatch):
 
     assert streamlit_stub.session_state.ga4_client_id == "fallback-client"
     assert streamlit_stub.session_state.ga4_session_id is None
+    assert streamlit_stub.session_state.ga4_client_id_received is False
+    assert streamlit_stub.session_state.ga4_session_id_received is False
+    assert streamlit_stub.session_state.ga4_client_id_source == "generated"
+    assert streamlit_stub.session_state.ga4_session_linkable is False
 
 
 def test_success_url_includes_ga4_identifiers_when_present(monkeypatch):

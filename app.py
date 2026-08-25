@@ -1,9 +1,11 @@
 
 import base64
 import datetime
+import hashlib
 import html
 import logging
 import os
+import re
 import secrets
 import sys
 import urllib.parse
@@ -57,6 +59,7 @@ from services.fortune_service import (
     call_gemini_review_pdf_summary,
 )
 from services.ga4_service import send_ga4_event
+from services.ga4_service import send_ga4_event_with_status
 from services.pdf_service import (
     format_review_comparison_blocks,
     generate_miko_letter_pdf,
@@ -122,6 +125,8 @@ PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
 SERVICE_ID = "ryujin"
 TRACKING_VALUE_MAX_LENGTH = 100
+LP_VALUE_MAX_LENGTH = 32
+LP_FALLBACK_VALUE = "direct_or_unknown"
 TRACKING_PARAM_KEYS = (
     "service_id",
     "product_type",
@@ -129,10 +134,39 @@ TRACKING_PARAM_KEYS = (
     "utm_medium",
     "utm_campaign",
     "utm_content",
+    "entry_lp",
+    "entry_utm_source",
+    "entry_utm_medium",
+    "entry_utm_campaign",
+    "entry_utm_content",
+    "current_lp",
     "test_mode",
     "button_position",
 )
 UTM_PARAM_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
+ENTRY_UTM_PARAM_KEYS = (
+    "entry_utm_source",
+    "entry_utm_medium",
+    "entry_utm_campaign",
+    "entry_utm_content",
+)
+LP_PARAM_KEYS = ("entry_lp", "current_lp")
+STRIPE_METADATA_TRACKING_KEYS = (
+    "service_id",
+    "product_type",
+    *UTM_PARAM_KEYS,
+    *ENTRY_UTM_PARAM_KEYS,
+    *LP_PARAM_KEYS,
+    "test_mode",
+    "button_position",
+)
+SUCCESS_URL_TRACKING_KEYS = (
+    *UTM_PARAM_KEYS,
+    *ENTRY_UTM_PARAM_KEYS,
+    *LP_PARAM_KEYS,
+    "test_mode",
+    "button_position",
+)
 VALID_TEST_MODES = {"owner", "none"}
 VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "sample_bottom", "unknown"}
 BUTTON_POSITION_ALIASES = {
@@ -147,6 +181,14 @@ BUTTON_POSITION_ALIASES = {
 }
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}
 GA4_IDENTIFIER_QUERY_PARAMS = {"ga4_client_id", "ga4_session_id"}
+VALID_GA4_CHECKOUT_REQUEST_STATUSES = {
+    "not_attempted",
+    "request_accepted",
+    "transport_failed",
+    "config_missing",
+    "disabled",
+    "exception",
+}
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
     "REGULAR_COMPLETION_ILLUSTRATION",
@@ -283,10 +325,18 @@ def init_session_state() -> None:
         st.session_state.checkout_url = None
     if "checkout_product_type" not in st.session_state:
         st.session_state.checkout_product_type = None
+    ga4_client_id_from_query = clean_ga4_identifier(get_query_param_value("ga4_client_id"))
+    ga4_session_id_from_query = clean_ga4_identifier(get_query_param_value("ga4_session_id"))
+    set_ga4_observation_state(
+        client_id_received=bool(ga4_client_id_from_query),
+        session_id_received=bool(ga4_session_id_from_query),
+    )
     if "ga4_client_id" not in st.session_state:
         st.session_state.ga4_client_id = secrets.token_urlsafe(16)
     if "ga4_session_id" not in st.session_state:
         st.session_state.ga4_session_id = None
+    if "ga4_checkout_request_status" not in st.session_state:
+        st.session_state.ga4_checkout_request_status = "not_attempted"
     if "ga4_page_view_locations" not in st.session_state:
         st.session_state.ga4_page_view_locations = set()
     if "ga4_form_displayed_purchase_ids" not in st.session_state:
@@ -328,6 +378,26 @@ def clean_tracking_value(value: Any, max_length: int = TRACKING_VALUE_MAX_LENGTH
     return safe_value[:max_length]
 
 
+def normalize_lp_value(value: str | None) -> str:
+    normalized = clean_tracking_value(value, TRACKING_VALUE_MAX_LENGTH).lower()
+    if len(normalized) > LP_VALUE_MAX_LENGTH:
+        return LP_FALLBACK_VALUE
+    if normalized == LP_FALLBACK_VALUE:
+        return LP_FALLBACK_VALUE
+    if re.fullmatch(r"lp_[a-z0-9_]{1,29}", normalized):
+        return normalized
+    return LP_FALLBACK_VALUE
+
+
+def is_specific_lp(value: str | None) -> bool:
+    return normalize_lp_value(value) != LP_FALLBACK_VALUE
+
+
+def legacy_lp_from_utm_content(value: str | None) -> str:
+    normalized = normalize_lp_value(value)
+    return normalized if normalized != LP_FALLBACK_VALUE else LP_FALLBACK_VALUE
+
+
 def normalize_test_mode(value: str | None) -> str:
     normalized = clean_tracking_value(value).lower()
     if normalized in VALID_TEST_MODES:
@@ -354,6 +424,12 @@ def get_default_tracking_params(product_type: str | None = None) -> dict[str, st
         "utm_medium": "",
         "utm_campaign": "",
         "utm_content": "",
+        "entry_lp": LP_FALLBACK_VALUE,
+        "entry_utm_source": "",
+        "entry_utm_medium": "",
+        "entry_utm_campaign": "",
+        "entry_utm_content": "",
+        "current_lp": LP_FALLBACK_VALUE,
         "test_mode": "none",
         "button_position": "unknown",
     }
@@ -370,13 +446,34 @@ def get_tracking_params_from_query() -> dict[str, str]:
         if value:
             params[key] = value
 
+    for key in ENTRY_UTM_PARAM_KEYS:
+        value = clean_tracking_value(get_query_param_value(key))
+        if value:
+            params[key] = value
+
+    utm_content = get_query_param_value("utm_content")
+    entry_lp = get_query_param_value("entry_lp")
+    if entry_lp is not None:
+        params["entry_lp"] = normalize_lp_value(entry_lp)
+    else:
+        params["entry_lp"] = legacy_lp_from_utm_content(utm_content)
+
+    current_lp = get_query_param_value("current_lp")
+    if current_lp is not None:
+        params["current_lp"] = normalize_lp_value(current_lp)
+    else:
+        params["current_lp"] = legacy_lp_from_utm_content(utm_content)
+
+    for old_key, entry_key in zip(UTM_PARAM_KEYS, ENTRY_UTM_PARAM_KEYS, strict=True):
+        if entry_key not in params and old_key in params:
+            params[entry_key] = params[old_key]
+
     test_mode = get_query_param_value("test_mode")
     if test_mode is not None:
         params["test_mode"] = normalize_test_mode(test_mode)
 
     button_position = get_query_param_value("button_position")
     button = get_query_param_value("button")
-    utm_content = get_query_param_value("utm_content")
     if button_position is not None or button is not None or utm_content is not None:
         params["button_position"] = normalize_button_position(
             button_position,
@@ -386,12 +483,27 @@ def get_tracking_params_from_query() -> dict[str, str]:
     return params
 
 
+def clean_ga4_identifier(value: str | None) -> str:
+    return clean_tracking_value(value)
+
+
+def set_ga4_observation_state(*, client_id_received: bool, session_id_received: bool) -> None:
+    st.session_state.ga4_client_id_received = bool(client_id_received)
+    st.session_state.ga4_session_id_received = bool(session_id_received)
+    st.session_state.ga4_client_id_source = "wix" if client_id_received else "generated"
+    st.session_state.ga4_session_linkable = bool(client_id_received and session_id_received)
+
+
 def update_ga4_identifiers_from_query() -> None:
-    ga4_client_id = clean_tracking_value(get_query_param_value("ga4_client_id"))
+    ga4_client_id = clean_ga4_identifier(get_query_param_value("ga4_client_id"))
+    ga4_session_id = clean_ga4_identifier(get_query_param_value("ga4_session_id"))
+    set_ga4_observation_state(
+        client_id_received=bool(ga4_client_id),
+        session_id_received=bool(ga4_session_id),
+    )
     if ga4_client_id:
         st.session_state.ga4_client_id = ga4_client_id
 
-    ga4_session_id = clean_tracking_value(get_query_param_value("ga4_session_id"))
     if ga4_session_id:
         st.session_state.ga4_session_id = ga4_session_id
 
@@ -407,6 +519,8 @@ def get_tracking_params_from_session() -> dict[str, str]:
             params[key] = normalize_test_mode(str(value or ""))
         elif key == "button_position":
             params[key] = normalize_button_position(str(value or ""))
+        elif key in LP_PARAM_KEYS:
+            params[key] = normalize_lp_value(str(value or ""))
         else:
             params[key] = clean_tracking_value(value)
     return params
@@ -428,6 +542,8 @@ def get_tracking_params_from_record(record: dict[str, Any] | None) -> dict[str, 
             params[key] = normalize_test_mode(str(record.get(key) or ""))
         elif key == "button_position":
             params[key] = normalize_button_position(str(record.get(key) or ""))
+        elif key in LP_PARAM_KEYS:
+            params[key] = normalize_lp_value(str(record.get(key) or ""))
         else:
             params[key] = clean_tracking_value(record.get(key))
     return params
@@ -450,6 +566,8 @@ def merge_tracking_params_by_priority(
                 cleaned = normalize_test_mode(str(value or ""))
             elif key == "button_position":
                 cleaned = normalize_button_position(str(value or ""))
+            elif key in LP_PARAM_KEYS:
+                cleaned = normalize_lp_value(str(value or ""))
             else:
                 cleaned = clean_tracking_value(value)
             if cleaned or key in {"service_id", "product_type", "test_mode", "button_position"}:
@@ -458,6 +576,8 @@ def merge_tracking_params_by_priority(
     merged["product_type"] = normalize_product_type(merged.get("product_type"))
     merged["test_mode"] = normalize_test_mode(merged.get("test_mode"))
     merged["button_position"] = normalize_button_position(merged.get("button_position"))
+    merged["entry_lp"] = normalize_lp_value(merged.get("entry_lp"))
+    merged["current_lp"] = normalize_lp_value(merged.get("current_lp"))
     return merged
 
 
@@ -465,20 +585,67 @@ def update_tracking_session_state(params: dict[str, Any] | None, *, overwrite_em
     current = get_tracking_params_from_session()
     incoming = merge_tracking_params_by_priority(params, current)
     for key, value in incoming.items():
+        if (
+            key == "entry_lp"
+            and not overwrite_empty
+            and current.get("entry_lp") != LP_FALLBACK_VALUE
+            and value == LP_FALLBACK_VALUE
+        ):
+            continue
         if overwrite_empty or value or key in {"service_id", "product_type", "test_mode", "button_position"}:
             st.session_state[key] = value
     return get_tracking_params_from_session()
 
 
 def update_tracking_session_state_from_query() -> dict[str, str]:
-    return update_tracking_session_state(get_tracking_params_from_query(), overwrite_empty=False)
+    query_params = get_tracking_params_from_query()
+    current = get_tracking_params_from_session()
+    raw_entry_lp = get_query_param_value("entry_lp")
+    keep_existing_entry = (
+        current.get("entry_lp") != LP_FALLBACK_VALUE
+        and (raw_entry_lp is None or normalize_lp_value(raw_entry_lp) == LP_FALLBACK_VALUE)
+    )
+    if keep_existing_entry:
+        query_params["entry_lp"] = current["entry_lp"]
+        for key in ENTRY_UTM_PARAM_KEYS:
+            if get_query_param_value(key) is None:
+                query_params[key] = current.get(key, "")
+    return update_tracking_session_state(query_params, overwrite_empty=False)
+
+
+def normalize_ga4_checkout_request_status(value: str | None) -> str:
+    normalized = clean_tracking_value(value).lower()
+    if normalized in VALID_GA4_CHECKOUT_REQUEST_STATUSES:
+        return normalized
+    return "not_attempted"
+
+
+def get_ga4_observation_params() -> dict[str, bool | str]:
+    client_id_received = bool(st.session_state.get("ga4_client_id_received"))
+    session_id_received = bool(st.session_state.get("ga4_session_id_received"))
+    return {
+        "ga4_client_id_received": client_id_received,
+        "ga4_session_id_received": session_id_received,
+        "ga4_client_id_source": "wix" if client_id_received else "generated",
+        "ga4_session_linkable": bool(client_id_received and session_id_received),
+        "ga4_checkout_request_status": normalize_ga4_checkout_request_status(
+            str(st.session_state.get("ga4_checkout_request_status") or "not_attempted")
+        ),
+    }
 
 
 def tracking_params_for_storage(product_type: str | None = None) -> dict[str, str]:
     params = get_tracking_params_from_session()
     params["product_type"] = normalize_product_type(product_type or params.get("product_type"))
     params["service_id"] = SERVICE_ID
-    return params
+    return {**params, **get_ga4_observation_params()}
+
+
+def tracking_params_for_stripe_metadata(product_type: str | None = None) -> dict[str, str]:
+    params = get_tracking_params_from_session()
+    params["product_type"] = normalize_product_type(product_type or params.get("product_type"))
+    params["service_id"] = SERVICE_ID
+    return {key: str(params[key]) for key in STRIPE_METADATA_TRACKING_KEYS if key in params}
 
 
 def get_utm_params() -> dict[str, str]:
@@ -586,7 +753,7 @@ def build_checkout_success_url(purchase_id: str, access_token: str, product_type
         **{
             key: value
             for key, value in tracking_params.items()
-            if key in {*UTM_PARAM_KEYS, "test_mode", "button_position"} and value
+            if key in SUCCESS_URL_TRACKING_KEYS and value
         },
     }
     ga4_client_id = clean_tracking_value(st.session_state.get("ga4_client_id"))
@@ -606,10 +773,19 @@ def track_ga4_event(
     logger: logging.Logger,
     params: dict[str, Any] | None = None,
 ) -> bool:
+    return track_ga4_event_with_status(event_name, logger, params)["sent"]
+
+
+def track_ga4_event_with_status(
+    event_name: str,
+    logger: logging.Logger,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     tracking_params = get_tracking_params_from_session()
     event_params = {
         "page_location": get_page_location(),
         **tracking_params,
+        **get_ga4_observation_params(),
     }
     if params:
         event_params.update(params)
@@ -619,8 +795,10 @@ def track_ga4_event(
     event_params["button_position"] = normalize_button_position(
         str(event_params.get("button_position") or "")
     )
+    event_params["entry_lp"] = normalize_lp_value(str(event_params.get("entry_lp") or ""))
+    event_params["current_lp"] = normalize_lp_value(str(event_params.get("current_lp") or ""))
 
-    return send_ga4_event(
+    return send_ga4_event_with_status(
         event_name=event_name,
         client_id=st.session_state.ga4_client_id,
         measurement_id=GA4_MEASUREMENT_ID,
@@ -679,6 +857,12 @@ def track_streamlit_page_view(logger: logging.Logger, product_type: str) -> None
 
 def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
+
+
+def build_correlation_ref(purchase_id: str | None) -> str:
+    if not purchase_id:
+        return ""
+    return hashlib.sha256(str(purchase_id).encode("utf-8")).hexdigest()[:12]
 
 
 def token_expires_at_datetime(hours: int = 24) -> datetime.datetime:
@@ -802,6 +986,25 @@ def update_purchase_record(purchase_id: str, **updates: Any) -> dict[str, Any] |
     return refreshed.to_dict() if refreshed.exists else None
 
 
+def update_checkout_ga4_status(
+    purchase_id: str,
+    status: str,
+    logger: logging.Logger,
+) -> None:
+    normalized_status = normalize_ga4_checkout_request_status(status)
+    st.session_state.ga4_checkout_request_status = normalized_status
+    try:
+        update_purchase_record(
+            purchase_id,
+            ga4_checkout_request_status=normalized_status,
+        )
+    except Exception:
+        logger.warning(
+            "ga4_checkout_status_update_failed",
+            extra={"correlation_ref": build_correlation_ref(purchase_id)},
+        )
+
+
 def get_tracking_params_from_metadata(metadata: Any | None) -> dict[str, str]:
     if not metadata or not hasattr(metadata, "get"):
         return {}
@@ -906,7 +1109,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
     price_type = get_checkout_price_type(product_type, active_price_id)
     record = create_purchase_record(active_price_id, active_amount_jpy, product_type, price_type)
     purchase_id = record["purchase_id"]
-    tracking_params = tracking_params_for_storage(product_type)
+    tracking_params = tracking_params_for_stripe_metadata(product_type)
 
     try:
         assert stripe is not None
@@ -952,7 +1155,7 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
                 "stripe_checkout_session_id": session.id,
             },
         )
-        track_ga4_event(
+        ga4_result = track_ga4_event_with_status(
             "checkout_session_created",
             logger,
             {
@@ -960,6 +1163,11 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
                 "amount_jpy": active_amount_jpy,
                 "price_type": price_type,
             },
+        )
+        update_checkout_ga4_status(
+            purchase_id,
+            str(ga4_result.get("status") or "exception"),
+            logger,
         )
         return session.url, None
     except Exception as exc:  # pragma: no cover - 外部API例外

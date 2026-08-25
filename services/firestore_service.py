@@ -71,20 +71,34 @@ def create_purchase_record(
     doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
 
     now = _now_utc()
-    safe_tracking_params = {
-        key: str(value)[:100]
-        for key, value in (tracking_params or {}).items()
-        if key in {
-            "service_id",
-            "utm_source",
-            "utm_medium",
-            "utm_campaign",
-            "utm_content",
-            "test_mode",
-            "button_position",
-        }
-        and value is not None
+    safe_tracking_keys = {
+        "service_id",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_content",
+        "entry_lp",
+        "entry_utm_source",
+        "entry_utm_medium",
+        "entry_utm_campaign",
+        "entry_utm_content",
+        "current_lp",
+        "test_mode",
+        "button_position",
+        "ga4_client_id_received",
+        "ga4_session_id_received",
+        "ga4_client_id_source",
+        "ga4_session_linkable",
+        "ga4_checkout_request_status",
     }
+    safe_tracking_params: Dict[str, Any] = {}
+    for key, value in (tracking_params or {}).items():
+        if key not in safe_tracking_keys or value is None:
+            continue
+        if key in {"ga4_client_id_received", "ga4_session_id_received", "ga4_session_linkable"}:
+            safe_tracking_params[key] = bool(value)
+        else:
+            safe_tracking_params[key] = str(value)[:100]
 
     payload: Dict[str, Any] = {
         "purchase_id": purchase_id,
@@ -97,6 +111,10 @@ def create_purchase_record(
         "ga4_reading_started_sent_at": None,
         "ga4_pdf_generated_sent": False,
         "ga4_pdf_generated_sent_at": None,
+        "ga4_checkout_request_status": safe_tracking_params.get(
+            "ga4_checkout_request_status",
+            "not_attempted",
+        ),
         "access_token_hash": hash_access_token(access_token),
         "token_expires_at": token_expires_at,
         "product_type": product_type if product_type in {"regular", "review"} else "regular",

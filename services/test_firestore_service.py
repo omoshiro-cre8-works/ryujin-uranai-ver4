@@ -300,6 +300,53 @@ def test_create_purchase_record_saves_tracking_params_without_private_fields(mon
     assert "pdf_body" not in payload
 
 
+def test_create_purchase_record_saves_entry_and_ga4_observation_without_ids(monkeypatch):
+    client = FakeFirestoreClient()
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+
+    firestore_service.create_purchase_record(
+        purchase_id="p_tracking",
+        stripe_checkout_session_id="cs_tracking",
+        access_token="secret-access-token",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        tracking_params={
+            "service_id": "ryujin",
+            "entry_lp": "lp_e",
+            "entry_utm_source": "instagram",
+            "entry_utm_medium": "paid_social",
+            "entry_utm_campaign": "summer",
+            "entry_utm_content": "lp_e_ad",
+            "current_lp": "lp_e",
+            "button_position": "sample_bottom",
+            "ga4_client_id_received": True,
+            "ga4_session_id_received": True,
+            "ga4_client_id_source": "wix",
+            "ga4_session_linkable": True,
+            "ga4_checkout_request_status": "not_attempted",
+            "ga4_client_id": "1498719245.1765352125",
+            "ga4_session_id": "1786245136",
+            "user_name": "should-not-save",
+        },
+    )
+
+    payload = client.collection_ref.document_ref.payload
+    assert payload["entry_lp"] == "lp_e"
+    assert payload["entry_utm_source"] == "instagram"
+    assert payload["entry_utm_medium"] == "paid_social"
+    assert payload["entry_utm_campaign"] == "summer"
+    assert payload["entry_utm_content"] == "lp_e_ad"
+    assert payload["current_lp"] == "lp_e"
+    assert payload["button_position"] == "sample_bottom"
+    assert payload["ga4_client_id_received"] is True
+    assert payload["ga4_session_id_received"] is True
+    assert payload["ga4_client_id_source"] == "wix"
+    assert payload["ga4_session_linkable"] is True
+    assert payload["ga4_checkout_request_status"] == "not_attempted"
+    assert "ga4_client_id" not in payload
+    assert "ga4_session_id" not in payload
+    assert "user_name" not in payload
+
+
 def test_legacy_purchase_records_can_be_read_without_tracking_fields(monkeypatch):
     record = {
         "purchase_id": "p_legacy",
