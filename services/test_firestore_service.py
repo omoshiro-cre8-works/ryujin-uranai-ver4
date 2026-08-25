@@ -1,8 +1,25 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import firestore
 
 from services import firestore_service
+
+
+def test_default_database_path_is_not_percent_encoded():
+    client = firestore.Client(
+        project="dummy-project",
+        credentials=AnonymousCredentials(),
+    )
+    batch = client.batch()
+    batch.set(client.collection("purchases").document("purchase_test"), {"ok": True})
+
+    # Private API is used here to inspect the local RPC request before network I/O.
+    request = batch._prep_commit(retry=None, timeout=None)[0]
+
+    assert request["database"] == "projects/dummy-project/databases/(default)"
+    assert request["database"] != "projects/dummy-project/databases/%28default%29"
 
 
 class FakeSnapshot:
