@@ -1,0 +1,45 @@
+steps:
+  - id: validate-commit-sha
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "COMMIT_SHA must be a 40-character lowercase hexadecimal Git SHA."
+          exit 1
+        fi
+        if [[ "$PROJECT_ID" != "$_EXPECTED_PROJECT_ID" ]]; then
+          echo "PROJECT_ID does not match the approved Artifact Registry project."
+          exit 1
+        fi
+
+  - id: build-webhook-image
+    name: gcr.io/cloud-builders/docker
+    dir: stripe_webhook
+    args:
+      - build
+      - --label
+      - org.opencontainers.image.source=https://github.com/omoshiro-cre8-works/ryujin-uranai-ver4
+      - --label
+      - org.opencontainers.image.revision=$COMMIT_SHA
+      - --label
+      - org.opencontainers.image.title=ai-uranai-webhook
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+      - -f
+      - Dockerfile
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+
+substitutions:
+  _REGION: asia-northeast2
+  _REPOSITORY: cloud-run-source-deploy
+  _IMAGE: ai-uranai-webhook
+  _EXPECTED_PROJECT_ID: gen-lang-client-0636169164
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  substitutionOption: ALLOW_LOOSE

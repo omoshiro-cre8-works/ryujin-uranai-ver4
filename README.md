@@ -89,6 +89,12 @@ py -m streamlit run app.py
 
 ---
 
+## Webhook build / deploy 運用
+
+Stripe Webhook のDockerfile build、image digest固定deploy、staging確認、production昇格、rollbackの手順は [docs/webhook-build-deploy-runbook.md](docs/webhook-build-deploy-runbook.md) を参照してください。
+
+---
+
 ## GA4計測
 Cloud Run 上の Streamlit ページでは、GA4 Measurement Protocol を使ってサーバー側からイベントを送信します。通常の GA タグ埋め込みに依存しないため、Streamlit の再描画や Cloud Run 環境でも計測しやすい構成です。
 
