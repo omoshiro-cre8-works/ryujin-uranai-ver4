@@ -7,6 +7,14 @@ from google.cloud import firestore
 from services import firestore_service
 
 
+@pytest.fixture(autouse=True)
+def production_firestore_defaults(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
+    monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
+    monkeypatch.delenv("FIRESTORE_COLLECTION_NAME", raising=False)
+
+
 def test_default_database_path_is_not_percent_encoded():
     client = firestore.Client(
         project="dummy-project",
@@ -105,7 +113,7 @@ class FakeFirestoreClient:
         self.transaction_ref = FakeTransaction()
 
     def collection(self, name):
-        assert name == firestore_service.COLLECTION_NAME
+        assert name == firestore_service.get_firestore_collection_name()
         return self.collection_ref
 
     def transaction(self):

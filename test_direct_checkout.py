@@ -35,6 +35,80 @@ def test_regular_stripe_readiness_requires_regular_price(monkeypatch):
     assert not app.stripe_client_ready(app.PRODUCT_TYPE_REGULAR)
 
 
+def test_staging_invalid_stripe_mode_blocks_checkout_before_side_effects(monkeypatch):
+    calls = []
+    stripe_stub = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(
+                create=lambda **kwargs: calls.append(("stripe_create", kwargs)),
+            )
+        ),
+    )
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(
+        app,
+        "create_purchase_record",
+        lambda *args, **kwargs: calls.append(("create_purchase", args, kwargs)),
+    )
+
+    checkout_url, error = app.create_checkout_session(
+        app.PRODUCT_TYPE_REGULAR,
+        SimpleNamespace(error=lambda *args, **kwargs: None),
+    )
+
+    assert checkout_url is None
+    assert "STRIPE_MODE=test" in error
+    assert calls == []
+
+
+def test_retrieve_checkout_session_handles_environment_config_error(monkeypatch):
+    calls = []
+    stripe_stub = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(
+                retrieve=lambda session_id: calls.append(("retrieve", session_id)),
+            )
+        ),
+    )
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REVIEW", "price_review_test")
+
+    assert app.retrieve_checkout_session("cs_test_1") is None
+    assert calls == []
+
+
+def test_render_direct_checkout_handles_environment_config_error(monkeypatch):
+    rendered_errors = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.error = lambda value, **kwargs: rendered_errors.append(value)
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "SHOW_DEBUG", False)
+
+    app.render_direct_checkout(
+        app.PRODUCT_TYPE_REGULAR,
+        SimpleNamespace(error=lambda *args, **kwargs: None),
+    )
+
+    assert rendered_errors == ["ただいま決済ページを準備できません。時間をおいてもう一度お試しください。"]
+
+
 def test_review_checkout_price_uses_review_price_id(monkeypatch):
     monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
     monkeypatch.setattr(app, "STRIPE_PRICE_ID_REVIEW", "price_review_test")

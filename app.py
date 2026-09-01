@@ -47,10 +47,12 @@ from services.firestore_service import (
     consume_purchase_transaction,
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
+    get_purchase_collection,
     get_purchase_by_access_token,
     is_ga4_event_sent,
     mark_ga4_event_sent_if_unset,
 )
+from stripe_webhook.environment_config import EnvironmentConfigError, get_stripe_settings
 from services.fortune_service import (
     build_image_parts,
     build_review_context,
@@ -923,7 +925,7 @@ def clear_checkout_session_state() -> None:
 
 def _purchase_doc_ref(purchase_id: str):
     db = get_firestore_client()
-    return db.collection("purchases").document(purchase_id)
+    return get_purchase_collection(db).document(purchase_id)
 
 
 def create_purchase_record(
@@ -1088,6 +1090,7 @@ def is_purchase_ready(record: dict[str, Any] | None) -> bool:
 def stripe_client_ready(product_type: str = PRODUCT_TYPE_REGULAR) -> bool:
     if not stripe or not STRIPE_SECRET_KEY:
         return False
+    get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
     normalized_product_type = normalize_product_type(product_type)
     if normalized_product_type == PRODUCT_TYPE_REVIEW:
         if not STRIPE_PRICE_ID_REVIEW:
@@ -1100,7 +1103,13 @@ def stripe_client_ready(product_type: str = PRODUCT_TYPE_REGULAR) -> bool:
 
 def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[str | None, str | None]:
     product_type = normalize_product_type(product_type)
-    if not stripe_client_ready(product_type):
+    try:
+        is_stripe_ready = stripe_client_ready(product_type)
+    except EnvironmentConfigError as exc:
+        logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
+        return None, str(exc)
+
+    if not is_stripe_ready:
         if product_type == PRODUCT_TYPE_REVIEW:
             return None, "見返し便の決済設定がまだ完了していません。環境変数 STRIPE_REVIEW_PRICE_ID を確認してください。"
         return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を確認してください。"
@@ -1178,7 +1187,11 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
 def retrieve_checkout_session(session_id: str) -> Any | None:
     if not session_id:
         return None
-    if not stripe_client_ready(PRODUCT_TYPE_REGULAR) and not stripe_client_ready(PRODUCT_TYPE_REVIEW):
+    try:
+        stripe_ready = stripe_client_ready(PRODUCT_TYPE_REGULAR) or stripe_client_ready(PRODUCT_TYPE_REVIEW)
+    except EnvironmentConfigError:
+        return None
+    if not stripe_ready:
         return None
     try:
         assert stripe is not None
@@ -1386,7 +1399,16 @@ def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
     product_type = normalize_product_type(product_type)
     _, active_amount_jpy = get_active_checkout_price(product_type, logger)
 
-    if not stripe_client_ready(product_type):
+    try:
+        is_stripe_ready = stripe_client_ready(product_type)
+    except EnvironmentConfigError as exc:
+        logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
+        st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
+        if SHOW_DEBUG:
+            st.caption(str(exc))
+        return
+
+    if not is_stripe_ready:
         st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
         return
 

@@ -7,8 +7,11 @@ from typing import Any, Dict, Optional
 
 from google.cloud import firestore
 
+from stripe_webhook.environment_config import (
+    build_firestore_client_kwargs,
+    get_firestore_collection_name,
+)
 
-COLLECTION_NAME = "purchases"
 GA4_EVENT_FIELD_MAP: Dict[str, tuple[str, str]] = {
     "reading_started": ("ga4_reading_started_sent", "ga4_reading_started_sent_at"),
     "pdf_generated": ("ga4_pdf_generated_sent", "ga4_pdf_generated_sent_at"),
@@ -27,7 +30,12 @@ def get_firestore_client() -> firestore.Client:
     Cloud Run 上では Application Default Credentials (ADC) を使って
     認証される想定。
     """
-    return firestore.Client()
+    client_kwargs, _ = build_firestore_client_kwargs()
+    return firestore.Client(**client_kwargs)
+
+
+def get_purchase_collection(db: firestore.Client):
+    return db.collection(get_firestore_collection_name())
 
 
 def hash_access_token(access_token: str) -> str:
@@ -68,7 +76,7 @@ def create_purchase_record(
         作成した purchase_id
     """
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
 
     now = _now_utc()
     safe_tracking_keys = {
@@ -136,7 +144,7 @@ def get_purchase_by_id(purchase_id: str) -> Optional[Dict[str, Any]]:
     purchase_id で購入レコードを取得する。
     """
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
     snapshot = doc_ref.get()
 
     if not snapshot.exists:
@@ -157,7 +165,7 @@ def get_purchase_by_access_token(access_token: str) -> Optional[Dict[str, Any]]:
     access_token_hash = hash_access_token(access_token)
 
     hash_query = (
-        db.collection(COLLECTION_NAME)
+        get_purchase_collection(db)
         .where("access_token_hash", "==", access_token_hash)
         .limit(1)
     )
@@ -169,7 +177,7 @@ def get_purchase_by_access_token(access_token: str) -> Optional[Dict[str, Any]]:
             return data
 
     legacy_query = (
-        db.collection(COLLECTION_NAME)
+        get_purchase_collection(db)
         .where("access_token", "==", access_token)
         .limit(1)
     )
@@ -204,7 +212,7 @@ def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
         return False
 
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
     transaction = db.transaction()
 
     @firestore.transactional
@@ -275,7 +283,7 @@ def mark_ga4_event_sent_if_unset(purchase_id: str, event_name: str) -> bool:
 
     sent_field, sent_at_field = get_ga4_event_fields(event_name)
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
     transaction = db.transaction()
 
     @firestore.transactional
@@ -308,7 +316,7 @@ def mark_purchase_paid(
     購入レコードを paid 状態に更新する。
     """
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
 
     update_data: Dict[str, Any] = {
         "payment_status": "paid",
@@ -326,7 +334,7 @@ def mark_purchase_cancelled(purchase_id: str) -> None:
     購入レコードを cancelled 状態に更新する。
     """
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
 
     doc_ref.update(
         {
@@ -341,7 +349,7 @@ def mark_purchase_used(purchase_id: str) -> None:
     購入レコードを利用済みに更新する。
     """
     db = get_firestore_client()
-    doc_ref = db.collection(COLLECTION_NAME).document(purchase_id)
+    doc_ref = get_purchase_collection(db).document(purchase_id)
 
     doc_ref.update(
         {
