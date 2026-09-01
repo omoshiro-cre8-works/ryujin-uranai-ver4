@@ -178,8 +178,28 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
 def healthcheck():
     try:
         collection_name = get_firestore_collection_name()
-    except EnvironmentConfigError as exc:
-        return jsonify({"status": "error", "error": str(exc)}), 500
+    except EnvironmentConfigError:
+        logger.error(
+            "webhook_health_configuration_invalid",
+            extra={"component": "firestore", "status": "configuration_invalid"},
+        )
+        return jsonify({"status": "error", "error": "configuration invalid"}), 500
+
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        logger.error(
+            "webhook_health_configuration_invalid",
+            extra={"component": "stripe", "status": "configuration_invalid"},
+        )
+        return jsonify({"status": "error", "error": "configuration invalid"}), 500
+
+    try:
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
+    except EnvironmentConfigError:
+        logger.error(
+            "webhook_health_configuration_invalid",
+            extra={"component": "stripe", "status": "configuration_invalid"},
+        )
+        return jsonify({"status": "error", "error": "configuration invalid"}), 500
 
     return jsonify(
         {
