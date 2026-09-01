@@ -7,12 +7,20 @@ from flask import Flask, jsonify, request
 from google.cloud import firestore
 import stripe
 
-from services.environment_config import (
-    EnvironmentConfigError,
-    build_firestore_client_kwargs,
-    get_firestore_collection_name,
-    get_stripe_settings,
-)
+try:
+    from stripe_webhook.environment_config import (
+        EnvironmentConfigError,
+        build_firestore_client_kwargs,
+        get_firestore_collection_name,
+        get_stripe_settings,
+    )
+except ImportError:  # pragma: no cover - used when the build context is stripe_webhook/
+    from environment_config import (
+        EnvironmentConfigError,
+        build_firestore_client_kwargs,
+        get_firestore_collection_name,
+        get_stripe_settings,
+    )
 
 app = Flask(__name__)
 
@@ -168,11 +176,16 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
 
 @app.get("/")
 def healthcheck():
+    try:
+        collection_name = get_firestore_collection_name()
+    except EnvironmentConfigError as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
+
     return jsonify(
         {
             "status": "ok",
             "service": "stripe-webhook",
-            "collection": get_firestore_collection_name(),
+            "collection": collection_name,
         }
     )
 
@@ -221,7 +234,11 @@ def stripe_webhook():
     )
 
     if event_type == "checkout.session.completed":
-        handled = mark_purchase_paid_from_session(event_object, event_id)
+        try:
+            handled = mark_purchase_paid_from_session(event_object, event_id)
+        except EnvironmentConfigError as exc:
+            logger.error("webhook_environment_config_error", extra={"reason": str(exc)})
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"received": True, "handled": handled}), 200
 
     return jsonify({"received": True, "ignored_event_type": event_type}), 200

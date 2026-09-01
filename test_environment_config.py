@@ -1,9 +1,11 @@
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from services.environment_config import (
+from stripe_webhook.environment_config import (
     DEFAULT_FIRESTORE_DATABASE_ID,
     EnvironmentConfigError,
     PRODUCTION_FIRESTORE_COLLECTION,
@@ -18,6 +20,7 @@ from services.environment_config import (
 def test_app_env_normalizes_existing_production_value():
     assert get_app_environment({"APP_ENV": " prod "}) == "production"
     assert get_app_environment({"APP_ENV": "production"}) == "production"
+    assert get_app_environment({"APP_ENV": "StAgInG"}) == "staging"
     assert get_app_environment({"APP_ENV": "staging"}) == "staging"
     assert get_app_environment({"APP_ENV": "test"}) == "test"
 
@@ -25,6 +28,25 @@ def test_app_env_normalizes_existing_production_value():
 def test_unknown_app_env_fails_closed():
     with pytest.raises(EnvironmentConfigError, match="APP_ENV"):
         get_app_environment({"APP_ENV": "preview"})
+
+
+def test_app_env_uses_production_webhook_compatibility_from_k_service():
+    assert get_app_environment({"K_SERVICE": "ai-uranai-webhook"}) == "production"
+
+
+def test_app_env_requires_explicit_staging_for_staging_webhook_service():
+    with pytest.raises(EnvironmentConfigError, match="APP_ENV=staging"):
+        get_app_environment({"K_SERVICE": "ai-uranai-webhook-staging"})
+
+
+def test_app_env_rejects_unknown_cloud_run_service_without_explicit_app_env():
+    with pytest.raises(EnvironmentConfigError, match="Cloud Run"):
+        get_app_environment({"K_SERVICE": "ai-uranai-h1-staging"})
+
+
+def test_app_env_missing_and_blank_are_local_outside_cloud_run():
+    assert get_app_environment({}) == "local"
+    assert get_app_environment({"APP_ENV": "   "}) == "local"
 
 
 def test_production_preserves_default_firestore_connection():
@@ -128,6 +150,19 @@ def test_local_and_test_do_not_allow_live_stripe_mode():
     assert get_stripe_settings({"APP_ENV": "test"}).mode == "test"
 
 
+def test_local_and_test_reject_live_stripe_key_prefix():
+    with pytest.raises(EnvironmentConfigError, match="live secret key"):
+        get_stripe_settings(
+            {"APP_ENV": "local", "STRIPE_MODE": "test"},
+            secret_key="sk_live_placeholder",
+        )
+    with pytest.raises(EnvironmentConfigError, match="live secret key"):
+        get_stripe_settings(
+            {"APP_ENV": "test"},
+            secret_key="rk_live_placeholder",
+        )
+
+
 def test_firestore_service_client_uses_configured_database(monkeypatch):
     from services import firestore_service
 
@@ -169,7 +204,7 @@ def test_staging_config_error_prevents_firestore_client_creation(monkeypatch):
     assert calls == []
 
 
-def test_local_firestore_without_project_fails_before_client_creation(monkeypatch):
+def test_local_firestore_without_project_preserves_existing_client_creation(monkeypatch):
     from services import firestore_service
 
     calls = []
@@ -182,10 +217,26 @@ def test_local_firestore_without_project_fails_before_client_creation(monkeypatc
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
     monkeypatch.setattr(firestore_service.firestore, "Client", FakeClient)
 
-    with pytest.raises(EnvironmentConfigError, match="FIRESTORE_PROJECT_ID"):
-        firestore_service.get_firestore_client()
+    firestore_service.get_firestore_client()
 
-    assert calls == []
+    assert calls == [{}]
+
+
+def test_production_webhook_compat_env_preserves_existing_defaults():
+    env = {
+        "K_SERVICE": "ai-uranai-webhook",
+        "FIRESTORE_COLLECTION_NAME": "purchases",
+    }
+
+    kwargs, firestore_settings = build_firestore_client_kwargs(env)
+    stripe_settings = get_stripe_settings(env, secret_key="sk_live_placeholder")
+
+    assert kwargs == {}
+    assert firestore_settings.app_env == "production"
+    assert firestore_settings.project_id is None
+    assert firestore_settings.database_id == DEFAULT_FIRESTORE_DATABASE_ID
+    assert firestore_settings.collection_name == "purchases"
+    assert stripe_settings.mode == "live"
 
 
 def test_webhook_firestore_uses_configured_database_and_collection(monkeypatch):
@@ -248,3 +299,45 @@ def test_executable_code_has_no_direct_production_purchase_collection_reference(
     ]
 
     assert offenders == []
+
+
+def test_webhook_docker_context_can_import_environment_config():
+    root = Path(__file__).resolve().parent
+    script = """
+import sys, types
+from types import SimpleNamespace
+class FakeFlask:
+    def __init__(self, *args, **kwargs): pass
+    def get(self, *args, **kwargs): return lambda func: func
+    def post(self, *args, **kwargs): return lambda func: func
+flask_module = types.ModuleType("flask")
+flask_module.Flask = FakeFlask
+flask_module.jsonify = lambda value=None, **kwargs: value if value is not None else kwargs
+flask_module.request = SimpleNamespace(get_data=lambda: b"", headers={})
+sys.modules["flask"] = flask_module
+stripe_module = types.ModuleType("stripe")
+stripe_module.api_key = None
+stripe_module.Webhook = SimpleNamespace(construct_event=lambda **kwargs: {})
+stripe_module.error = SimpleNamespace(SignatureVerificationError=Exception)
+sys.modules["stripe"] = stripe_module
+google_module = sys.modules.setdefault("google", types.ModuleType("google"))
+cloud_module = sys.modules.setdefault("google.cloud", types.ModuleType("google.cloud"))
+firestore_module = types.ModuleType("google.cloud.firestore")
+firestore_module.Client = lambda **kwargs: None
+cloud_module.firestore = firestore_module
+google_module.cloud = cloud_module
+sys.modules["google.cloud.firestore"] = firestore_module
+import stripe_webhook_app
+print("ok")
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root / "stripe_webhook",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

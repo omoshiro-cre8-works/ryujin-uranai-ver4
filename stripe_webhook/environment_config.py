@@ -15,6 +15,8 @@ LOCAL_ENV = "local"
 TEST_ENV = "test"
 DEFAULT_FIRESTORE_DATABASE_ID = "(default)"
 PRODUCTION_FIRESTORE_COLLECTION = "purchases"
+PRODUCTION_WEBHOOK_SERVICE = "ai-uranai-webhook"
+STAGING_WEBHOOK_SERVICE = "ai-uranai-webhook-staging"
 
 _APP_ENV_ALIASES = {
     "prod": PRODUCTION_ENV,
@@ -49,13 +51,27 @@ def _read_env(env: Mapping[str, str] | None, key: str) -> str:
 
 
 def get_app_environment(env: Mapping[str, str] | None = None) -> str:
-    raw_value = _read_env(env, "APP_ENV") or LOCAL_ENV
-    normalized = _APP_ENV_ALIASES.get(raw_value.lower())
-    if normalized is None:
-        raise EnvironmentConfigError(
-            "APP_ENV は production / staging / local / test のいずれかを指定してください。"
-        )
-    return normalized
+    raw_app_env = _read_env(env, "APP_ENV")
+    if raw_app_env:
+        normalized = _APP_ENV_ALIASES.get(raw_app_env.lower())
+        if normalized is None:
+            raise EnvironmentConfigError(
+                "APP_ENV は production / staging / local / test のいずれかを指定してください。"
+            )
+        return normalized
+
+    k_service = _read_env(env, "K_SERVICE")
+    if not k_service:
+        return LOCAL_ENV
+
+    # Temporary backward compatibility for the current production webhook.
+    # Remove this fallback after APP_ENV=production is explicitly set there.
+    if k_service == PRODUCTION_WEBHOOK_SERVICE:
+        return PRODUCTION_ENV
+    if k_service == STAGING_WEBHOOK_SERVICE:
+        raise EnvironmentConfigError("staging webhook では APP_ENV=staging が必須です。")
+
+    raise EnvironmentConfigError("Cloud Run では APP_ENV を明示してください。")
 
 
 def get_firestore_settings(env: Mapping[str, str] | None = None) -> FirestoreSettings:
@@ -79,10 +95,6 @@ def get_firestore_settings(env: Mapping[str, str] | None = None) -> FirestoreSet
             raise EnvironmentConfigError(
                 "staging では production 用 Firestore collection を使用できません。"
             )
-    elif app_env in {LOCAL_ENV, TEST_ENV} and not project_id:
-        raise EnvironmentConfigError(
-            "local/test 環境では FIRESTORE_PROJECT_ID を明示してください。"
-        )
 
     return FirestoreSettings(
         app_env=app_env,
@@ -136,9 +148,9 @@ def get_stripe_settings(
 
     key = (secret_key or "").strip()
     if key:
-        if app_env == STAGING_ENV and key.startswith(("sk_live_", "rk_live_")):
+        if app_env in {STAGING_ENV, LOCAL_ENV, TEST_ENV} and key.startswith(("sk_live_", "rk_live_")):
             raise EnvironmentConfigError(
-                "staging では Stripe live secret key を使用できません。"
+                f"{app_env} では Stripe live secret key を使用できません。"
             )
         if app_env == PRODUCTION_ENV and key.startswith(("sk_test_", "rk_test_")):
             raise EnvironmentConfigError(

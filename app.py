@@ -52,7 +52,7 @@ from services.firestore_service import (
     is_ga4_event_sent,
     mark_ga4_event_sent_if_unset,
 )
-from services.environment_config import EnvironmentConfigError, get_stripe_settings
+from stripe_webhook.environment_config import EnvironmentConfigError, get_stripe_settings
 from services.fortune_service import (
     build_image_parts,
     build_review_context,

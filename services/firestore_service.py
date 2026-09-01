@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from google.cloud import firestore
 
-from services.environment_config import (
+from stripe_webhook.environment_config import (
     build_firestore_client_kwargs,
     get_firestore_collection_name,
 )
