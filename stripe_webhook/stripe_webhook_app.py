@@ -7,6 +7,13 @@ from flask import Flask, jsonify, request
 from google.cloud import firestore
 import stripe
 
+from services.environment_config import (
+    EnvironmentConfigError,
+    build_firestore_client_kwargs,
+    get_firestore_collection_name,
+    get_stripe_settings,
+)
+
 app = Flask(__name__)
 
 logging.basicConfig(
@@ -17,12 +24,9 @@ logger = logging.getLogger(__name__)
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-FIRESTORE_COLLECTION_NAME = os.getenv("FIRESTORE_COLLECTION_NAME", "purchases")
 PRODUCT_TYPE_REGULAR = "regular"
 PRODUCT_TYPE_REVIEW = "review"
 VALID_PRODUCT_TYPES = {PRODUCT_TYPE_REGULAR, PRODUCT_TYPE_REVIEW}
-
-stripe.api_key = STRIPE_SECRET_KEY
 
 
 def utc_now() -> datetime.datetime:
@@ -30,12 +34,13 @@ def utc_now() -> datetime.datetime:
 
 
 def get_firestore_client() -> firestore.Client:
-    return firestore.Client()
+    client_kwargs, _ = build_firestore_client_kwargs()
+    return firestore.Client(**client_kwargs)
 
 
 def get_purchase_doc_ref(purchase_id: str):
     db = get_firestore_client()
-    return db.collection(FIRESTORE_COLLECTION_NAME).document(purchase_id)
+    return db.collection(get_firestore_collection_name()).document(purchase_id)
 
 
 def get_purchase_record(purchase_id: str) -> dict[str, Any] | None:
@@ -167,7 +172,7 @@ def healthcheck():
         {
             "status": "ok",
             "service": "stripe-webhook",
-            "collection": FIRESTORE_COLLECTION_NAME,
+            "collection": get_firestore_collection_name(),
         }
     )
 
@@ -181,6 +186,14 @@ def stripe_webhook():
     if not STRIPE_WEBHOOK_SECRET:
         logger.error("missing_STRIPE_WEBHOOK_SECRET")
         return jsonify({"error": "missing STRIPE_WEBHOOK_SECRET"}), 500
+
+    try:
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
+    except EnvironmentConfigError as exc:
+        logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
+        return jsonify({"error": str(exc)}), 500
+
+    stripe.api_key = STRIPE_SECRET_KEY
 
     payload = request.get_data()
     sig_header = request.headers.get("Stripe-Signature", "")
