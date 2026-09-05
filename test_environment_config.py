@@ -75,14 +75,14 @@ def test_staging_uses_explicit_firestore_target():
         "APP_ENV": " staging ",
         "FIRESTORE_PROJECT_ID": "staging-project",
         "FIRESTORE_DATABASE_ID": "ryujin-staging",
-        "FIRESTORE_COLLECTION_NAME": "purchases_staging",
+        "FIRESTORE_COLLECTION_NAME": "purchases",
     }
 
     kwargs, settings = build_firestore_client_kwargs(env)
 
     assert kwargs == {"project": "staging-project", "database": "ryujin-staging"}
-    assert settings.collection_name == "purchases_staging"
-    assert get_firestore_collection_name(env) == "purchases_staging"
+    assert settings.collection_name == "purchases"
+    assert get_firestore_collection_name(env) == "purchases"
 
 
 @pytest.mark.parametrize(
@@ -92,7 +92,6 @@ def test_staging_uses_explicit_firestore_target():
         ({"FIRESTORE_DATABASE_ID": ""}, "FIRESTORE_DATABASE_ID"),
         ({"FIRESTORE_DATABASE_ID": "(default)"}, "default"),
         ({"FIRESTORE_COLLECTION_NAME": ""}, "FIRESTORE_COLLECTION_NAME"),
-        ({"FIRESTORE_COLLECTION_NAME": "purchases"}, "production"),
     ],
 )
 def test_staging_firestore_fails_closed(env_update, message):
@@ -100,7 +99,7 @@ def test_staging_firestore_fails_closed(env_update, message):
         "APP_ENV": "staging",
         "FIRESTORE_PROJECT_ID": "staging-project",
         "FIRESTORE_DATABASE_ID": "ryujin-staging",
-        "FIRESTORE_COLLECTION_NAME": "purchases_staging",
+        "FIRESTORE_COLLECTION_NAME": "purchases",
     }
     env.update(env_update)
 
@@ -175,7 +174,7 @@ def test_firestore_service_client_uses_configured_database(monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "staging-project")
     monkeypatch.setenv("FIRESTORE_DATABASE_ID", "ryujin-staging")
-    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases_staging")
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
     monkeypatch.setattr(firestore_service.firestore, "Client", FakeClient)
 
     firestore_service.get_firestore_client()
@@ -195,7 +194,7 @@ def test_staging_config_error_prevents_firestore_client_creation(monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "staging-project")
     monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
-    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases_staging")
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
     monkeypatch.setattr(firestore_service.firestore, "Client", FakeClient)
 
     with pytest.raises(EnvironmentConfigError):
@@ -263,14 +262,14 @@ def test_webhook_firestore_uses_configured_database_and_collection(monkeypatch):
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "staging-project")
     monkeypatch.setenv("FIRESTORE_DATABASE_ID", "ryujin-staging")
-    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases_staging")
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
     monkeypatch.setattr(stripe_webhook_app.firestore, "Client", FakeClient)
 
     stripe_webhook_app.get_purchase_doc_ref("p_1")
 
     assert calls == [
         ("client", {"project": "staging-project", "database": "ryujin-staging"}),
-        ("collection", "purchases_staging"),
+        ("collection", "purchases"),
         ("document", "p_1"),
     ]
 

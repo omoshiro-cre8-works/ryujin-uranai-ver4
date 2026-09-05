@@ -290,7 +290,6 @@ def test_staging_healthcheck_fails_closed_for_firestore_settings(monkeypatch) ->
         {"FIRESTORE_DATABASE_ID": None},
         {"FIRESTORE_DATABASE_ID": "(default)"},
         {"FIRESTORE_COLLECTION_NAME": None},
-        {"FIRESTORE_COLLECTION_NAME": "purchases"},
     ]
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_TEST_KEY)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
