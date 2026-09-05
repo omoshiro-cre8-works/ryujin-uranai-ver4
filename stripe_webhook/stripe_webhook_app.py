@@ -185,7 +185,7 @@ def healthcheck():
         )
         return jsonify({"status": "error", "error": "configuration invalid"}), 500
 
-    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+    if not STRIPE_WEBHOOK_SECRET:
         logger.error(
             "webhook_health_configuration_invalid",
             extra={"component": "stripe", "status": "configuration_invalid"},
@@ -193,7 +193,7 @@ def healthcheck():
         return jsonify({"status": "error", "error": "configuration invalid"}), 500
 
     try:
-        get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY or None)
     except EnvironmentConfigError:
         logger.error(
             "webhook_health_configuration_invalid",
@@ -212,21 +212,15 @@ def healthcheck():
 
 @app.post("/stripe/webhook")
 def stripe_webhook():
-    if not STRIPE_SECRET_KEY:
-        logger.error("missing_STRIPE_SECRET_KEY")
-        return jsonify({"error": "missing STRIPE_SECRET_KEY"}), 500
-
     if not STRIPE_WEBHOOK_SECRET:
         logger.error("missing_STRIPE_WEBHOOK_SECRET")
         return jsonify({"error": "missing STRIPE_WEBHOOK_SECRET"}), 500
 
     try:
-        get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY or None)
     except EnvironmentConfigError as exc:
         logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
         return jsonify({"error": str(exc)}), 500
-
-    stripe.api_key = STRIPE_SECRET_KEY
 
     payload = request.get_data()
     sig_header = request.headers.get("Stripe-Signature", "")
