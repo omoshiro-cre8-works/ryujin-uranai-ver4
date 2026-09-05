@@ -91,10 +91,6 @@ def get_firestore_settings(env: Mapping[str, str] | None = None) -> FirestoreSet
             )
         if not _read_env(env, "FIRESTORE_COLLECTION_NAME"):
             raise EnvironmentConfigError("staging では FIRESTORE_COLLECTION_NAME が必須です。")
-        if collection_name == PRODUCTION_FIRESTORE_COLLECTION:
-            raise EnvironmentConfigError(
-                "staging では production 用 Firestore collection を使用できません。"
-            )
 
     return FirestoreSettings(
         app_env=app_env,
