@@ -30,6 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PRODUCT_TYPE_REGULAR = "regular"
 PRODUCT_TYPE_REVIEW = "review"
@@ -192,7 +193,7 @@ def healthcheck():
         return jsonify({"status": "error", "error": "configuration invalid"}), 500
 
     try:
-        get_stripe_settings()
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY or None)
     except EnvironmentConfigError:
         logger.error(
             "webhook_health_configuration_invalid",
@@ -216,7 +217,7 @@ def stripe_webhook():
         return jsonify({"error": "missing STRIPE_WEBHOOK_SECRET"}), 500
 
     try:
-        get_stripe_settings()
+        get_stripe_settings(secret_key=STRIPE_SECRET_KEY or None)
     except EnvironmentConfigError as exc:
         logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
         return jsonify({"error": str(exc)}), 500

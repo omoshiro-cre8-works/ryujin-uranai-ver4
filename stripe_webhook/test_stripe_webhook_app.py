@@ -53,6 +53,8 @@ if "google.cloud.firestore" not in sys.modules:
 from stripe_webhook import stripe_webhook_app
 
 
+DUMMY_LIVE_KEY = "sk_live_dummy_pr6_not_real"
+DUMMY_TEST_KEY = "sk_test_dummy_pr6_not_real"
 DUMMY_WEBHOOK_SECRET = "whsec_dummy_pr6_not_real"
 
 
@@ -193,6 +195,7 @@ def test_production_webhook_compat_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook")
     monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_LIVE_KEY)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
     response = stripe_webhook_app.healthcheck()
@@ -208,6 +211,40 @@ def test_explicit_production_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
     monkeypatch.delenv("K_SERVICE", raising=False)
     monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_LIVE_KEY)
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
+
+    response = stripe_webhook_app.healthcheck()
+
+    assert response["status"] == "ok"
+    assert response["collection"] == "purchases"
+
+
+def test_production_healthcheck_rejects_test_api_key_if_present(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
+    monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_TEST_KEY)
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
+
+    response, status = stripe_webhook_app.healthcheck()
+
+    assert status == 500
+    assert response == {"status": "error", "error": "configuration invalid"}
+    assert DUMMY_TEST_KEY not in str(response)
+
+
+def test_production_healthcheck_succeeds_without_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
+    monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", "")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
     response = stripe_webhook_app.healthcheck()
@@ -223,6 +260,7 @@ def test_staging_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.setenv("FIRESTORE_DATABASE_ID", "ryujin-staging")
     monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
     monkeypatch.setenv("STRIPE_MODE", "test")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", "")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
     response = stripe_webhook_app.healthcheck()
