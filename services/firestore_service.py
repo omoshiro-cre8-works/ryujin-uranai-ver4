@@ -17,6 +17,10 @@ GA4_EVENT_FIELD_MAP: Dict[str, tuple[str, str]] = {
     "pdf_generated": ("ga4_pdf_generated_sent", "ga4_pdf_generated_sent_at"),
 }
 
+GENERATION_CLAIMED = "claimed"
+GENERATION_CLAIM_PROCESSING = "processing"
+GENERATION_CLAIM_NOT_READY = "not_ready"
+
 
 def _now_utc() -> datetime:
     """UTC の現在時刻を返す。"""
@@ -115,6 +119,9 @@ def create_purchase_record(
         "payment_status": "pending",
         "used_flag": False,
         "used_at": None,
+        "generation_processing": False,
+        "generation_processing_started_at": None,
+        "generation_processing_ended_at": None,
         "ga4_reading_started_sent": False,
         "ga4_reading_started_sent_at": None,
         "ga4_pdf_generated_sent": False,
@@ -204,6 +211,108 @@ def _access_token_matches(purchase: Dict[str, Any], access_token: str) -> bool:
     return isinstance(stored_token, str) and hmac.compare_digest(stored_token, access_token)
 
 
+def _purchase_token_is_active(purchase: Dict[str, Any]) -> bool:
+    expires_at = purchase.get("token_expires_at")
+    if not expires_at:
+        return False
+    if getattr(expires_at, "tzinfo", None) is None:
+        try:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            return False
+
+    now = _now_utc()
+    try:
+        return expires_at > now
+    except TypeError:
+        return False
+
+
+def _purchase_can_be_used(purchase: Dict[str, Any], access_token: str) -> bool:
+    return bool(
+        purchase.get("payment_status") == "paid"
+        and purchase.get("used_flag") is False
+        and _access_token_matches(purchase, access_token)
+        and _purchase_token_is_active(purchase)
+    )
+
+
+def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
+    """
+    transaction 内で生成開始前のpurchaseを処理中としてclaimする。
+    """
+    if not purchase_id or not access_token:
+        return GENERATION_CLAIM_NOT_READY
+
+    db = get_firestore_client()
+    doc_ref = get_purchase_collection(db).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def claim(transaction: Any) -> str:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return GENERATION_CLAIM_NOT_READY
+
+        purchase = snapshot.to_dict() or {}
+        if not _purchase_can_be_used(purchase, access_token):
+            return GENERATION_CLAIM_NOT_READY
+        if purchase.get("generation_processing") is True:
+            return GENERATION_CLAIM_PROCESSING
+
+        transaction.update(
+            doc_ref,
+            {
+                "generation_processing": True,
+                "generation_processing_started_at": firestore.SERVER_TIMESTAMP,
+                "generation_processing_ended_at": None,
+                "updated_at": _now_utc(),
+            },
+        )
+        return GENERATION_CLAIMED
+
+    return claim(transaction)
+
+
+def release_generation_claim_transaction(purchase_id: str, access_token: str) -> bool:
+    """
+    生成失敗時にprocessingを解除する。使用済みpurchaseは変更しない。
+    """
+    if not purchase_id or not access_token:
+        return False
+
+    db = get_firestore_client()
+    doc_ref = get_purchase_collection(db).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def release(transaction: Any) -> bool:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return False
+
+        purchase = snapshot.to_dict() or {}
+        if purchase.get("used_flag") is not False:
+            return False
+        if not _access_token_matches(purchase, access_token):
+            return False
+        if purchase.get("generation_processing") is not True:
+            return False
+
+        now = _now_utc()
+        transaction.update(
+            doc_ref,
+            {
+                "generation_processing": False,
+                "generation_processing_ended_at": now,
+                "updated_at": now,
+            },
+        )
+        return True
+
+    return release(transaction)
+
+
 def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
     """
     transaction 内で購入情報を再確認し、利用可能な場合だけ使用済みにする。
@@ -228,28 +337,17 @@ def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
             return False
         if not _access_token_matches(purchase, access_token):
             return False
-
-        expires_at = purchase.get("token_expires_at")
-        if not expires_at:
+        if not _purchase_token_is_active(purchase):
             return False
-        if getattr(expires_at, "tzinfo", None) is None:
-            try:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            except Exception:
-                return False
 
         now = _now_utc()
-        try:
-            if expires_at <= now:
-                return False
-        except TypeError:
-            return False
-
         transaction.update(
             doc_ref,
             {
                 "used_flag": True,
                 "used_at": now,
+                "generation_processing": False,
+                "generation_processing_ended_at": now,
                 "updated_at": now,
             },
         )
