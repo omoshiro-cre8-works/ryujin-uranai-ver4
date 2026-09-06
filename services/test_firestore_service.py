@@ -67,6 +67,8 @@ class FakeTransaction:
 
     def update(self, doc_ref, updates):
         self.updates.append((doc_ref, dict(updates)))
+        if getattr(doc_ref, "record", None) is not None:
+            doc_ref.record.update(updates)
 
 
 class FakeQuery:
@@ -205,6 +207,106 @@ def _run_consume(monkeypatch, record, token):
     return consumed, client
 
 
+def _run_claim(monkeypatch, record, token):
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+    status = firestore_service.claim_generation_transaction("p_transaction", token)
+    return status, client
+
+
+def _run_release(monkeypatch, record, token):
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+    released = firestore_service.release_generation_claim_transaction("p_transaction", token)
+    return released, client
+
+
+def test_claim_generation_transaction_marks_valid_record_processing(monkeypatch):
+    token, record = _consume_record()
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIMED
+    assert client.collection_ref.document_ref.read_transaction is client.transaction_ref
+    assert len(client.transaction_ref.updates) == 1
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["generation_processing"] is True
+    assert updates["generation_processing_started_at"] is firestore_service.firestore.SERVER_TIMESTAMP
+    assert updates["generation_processing_ended_at"] is None
+
+
+def test_claim_generation_transaction_rejects_second_claim(monkeypatch):
+    token, record = _consume_record()
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+
+    first_status = firestore_service.claim_generation_transaction("p_transaction", token)
+    second_status = firestore_service.claim_generation_transaction("p_transaction", token)
+
+    assert first_status == firestore_service.GENERATION_CLAIMED
+    assert second_status == firestore_service.GENERATION_CLAIM_PROCESSING
+    assert len(client.transaction_ref.updates) == 1
+
+
+@pytest.mark.parametrize(
+    "record_updates",
+    [
+        {"used_flag": True},
+        {"payment_status": "pending"},
+        {"token_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+    ],
+)
+def test_claim_generation_transaction_rejects_not_ready_records(monkeypatch, record_updates):
+    token, record = _consume_record(**record_updates)
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIM_NOT_READY
+    assert client.transaction_ref.updates == []
+
+
+def test_claim_generation_transaction_rejects_wrong_token(monkeypatch):
+    _, record = _consume_record()
+
+    status, client = _run_claim(monkeypatch, record, "wrong-token")
+
+    assert status == firestore_service.GENERATION_CLAIM_NOT_READY
+    assert client.transaction_ref.updates == []
+
+
+def test_claim_generation_transaction_rejects_processing_record(monkeypatch):
+    token, record = _consume_record(generation_processing=True)
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIM_PROCESSING
+    assert client.transaction_ref.updates == []
+
+
+def test_claim_generation_transaction_treats_missing_processing_field_as_available(monkeypatch):
+    token, record = _consume_record()
+    record.pop("generation_processing", None)
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIMED
+    assert client.transaction_ref.updates[0][1]["generation_processing"] is True
+
+
+def test_release_generation_claim_transaction_clears_processing(monkeypatch):
+    token, record = _consume_record(generation_processing=True)
+
+    released, client = _run_release(monkeypatch, record, token)
+
+    assert released is True
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["generation_processing"] is False
+    assert updates["generation_processing_ended_at"] == updates["updated_at"]
+
+
 def test_consume_purchase_transaction_updates_valid_hash_record(monkeypatch):
     token, record = _consume_record()
 
@@ -215,6 +317,8 @@ def test_consume_purchase_transaction_updates_valid_hash_record(monkeypatch):
     assert len(client.transaction_ref.updates) == 1
     updates = client.transaction_ref.updates[0][1]
     assert updates["used_flag"] is True
+    assert updates["generation_processing"] is False
+    assert updates["generation_processing_ended_at"] == updates["updated_at"]
     assert updates["used_at"] == updates["updated_at"]
 
 
@@ -404,6 +508,9 @@ def test_create_purchase_record_initializes_ga4_sent_flags(monkeypatch):
     assert payload["ga4_reading_started_sent_at"] is None
     assert payload["ga4_pdf_generated_sent"] is False
     assert payload["ga4_pdf_generated_sent_at"] is None
+    assert payload["generation_processing"] is False
+    assert payload["generation_processing_started_at"] is None
+    assert payload["generation_processing_ended_at"] is None
 
 
 def test_is_ga4_event_sent_treats_legacy_missing_field_as_false(monkeypatch):
