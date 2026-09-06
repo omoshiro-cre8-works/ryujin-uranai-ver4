@@ -2634,7 +2634,7 @@ def main() -> None:
     render_payment_section(
         display_product_type,
         logger,
-        allow_checkout_creation=not purchase_return_requested,
+        allow_checkout_creation=False,
     )
     render_notice_box()
     render_form_gap(2)
