@@ -160,8 +160,6 @@ def validate_inputs(
     if birth_time_accuracy != '不明' and (not birth_hour or not birth_minute):
         errors.append('出生時刻を入力する場合は、時と分の両方を選択してください。')
 
-    if not uploaded_files:
-        errors.append('手相画像をアップロードしてください。')
     if len(uploaded_files) > MAX_IMAGE_FILES:
         errors.append(f'手相画像は {MAX_IMAGE_FILES} 枚までにしてください。')
 

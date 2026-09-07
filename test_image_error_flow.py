@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import app
 from services.image_service import ImageProcessingError, NormalizedPalmImage
+from services.validation_service import validate_inputs
 
 
 class AttrDict(dict):
@@ -201,6 +202,39 @@ def test_review_image_error_click_is_guarded(monkeypatch):
     assert streamlit_stub.buttons[-1]["disabled"] is True
     assert "reading_started" not in calls
     assert "review_generate" not in calls
+
+
+def test_regular_inputs_allow_missing_palm_images():
+    errors = validate_inputs(
+        user_name="山田太郎",
+        birth_place="東京都",
+        categories=["総合運"],
+        concern_detail="近況メモ",
+        birth_time_accuracy="不明",
+        birth_hour=None,
+        birth_minute=None,
+        uploaded_files=[],
+        hand_sides=[],
+    )
+
+    assert "手相画像をアップロードしてください。" not in errors
+
+
+def test_regular_no_image_can_enter_submit_path(monkeypatch):
+    calls = []
+    streamlit_stub = StreamlitStub([], click_submit=True)
+    patch_common(monkeypatch, streamlit_stub, calls)
+    monkeypatch.setattr(app, "normalize_uploaded_images", lambda files: calls.append("normalize"))
+
+    app.render_fortune_form(
+        {"purchase_id": "p_test", "payment_status": "paid", "used_flag": False},
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+    )
+
+    assert streamlit_stub.buttons[-1]["disabled"] is False
+    assert "normalize" not in calls
+    assert "reading_started" in calls
+    assert "regular_generate" in calls
 
 
 def test_regular_valid_image_can_enter_submit_path(monkeypatch):
