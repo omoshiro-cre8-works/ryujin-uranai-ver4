@@ -6,6 +6,22 @@ import app
 from services.validation_service import validate_review_inputs
 
 
+def allow_generation_claim(monkeypatch, calls):
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+
+
+def track_generation_release(monkeypatch, calls):
+    monkeypatch.setattr(
+        app,
+        "release_purchase_generation_claim",
+        lambda purchase_id, logger: calls.append("release"),
+    )
+
+
 def make_review_inputs():
     return {
         "uploaded_pdf_bytes": b"previous-pdf",
@@ -36,6 +52,8 @@ def test_review_generation_consumes_only_after_summary_fortune_and_pdf(monkeypat
     calls = []
     review_context = {"review_context": {"current_inputs": {}}}
     review_fortune = {"intro": "result"}
+    allow_generation_claim(monkeypatch, calls)
+    track_generation_release(monkeypatch, calls)
 
     monkeypatch.setattr(
         app,
@@ -73,12 +91,14 @@ def test_review_generation_consumes_only_after_summary_fortune_and_pdf(monkeypat
         "review_fortune": review_fortune,
         "pdf_data": b"pdf",
     }
-    assert calls == ["summary", "context", "fortune", "pdf", "consume"]
+    assert calls == ["claim", "summary", "context", "fortune", "pdf", "consume"]
 
 
 def test_review_generation_does_not_consume_when_summary_fails(monkeypatch):
     calls = []
     summary_result = {"summary_success": False}
+    allow_generation_claim(monkeypatch, calls)
+    track_generation_release(monkeypatch, calls)
 
     monkeypatch.setattr(
         app,
@@ -97,12 +117,14 @@ def test_review_generation_does_not_consume_when_summary_fails(monkeypatch):
         "status": "summary_failed",
         "pdf_summary": summary_result,
     }
-    assert calls == ["summary"]
+    assert calls == ["claim", "summary", "release"]
 
 
 def test_review_generation_does_not_consume_when_fortune_fails(monkeypatch):
     calls = []
     fortune_result = {"fortune_success": False}
+    allow_generation_claim(monkeypatch, calls)
+    track_generation_release(monkeypatch, calls)
 
     monkeypatch.setattr(
         app,
@@ -132,11 +154,13 @@ def test_review_generation_does_not_consume_when_fortune_fails(monkeypatch):
         "status": "fortune_failed",
         "review_fortune_result": fortune_result,
     }
-    assert calls == ["summary", "context", "fortune"]
+    assert calls == ["claim", "summary", "context", "fortune", "release"]
 
 
 def test_review_generation_does_not_consume_when_pdf_fails(monkeypatch):
     calls = []
+    allow_generation_claim(monkeypatch, calls)
+    track_generation_release(monkeypatch, calls)
 
     monkeypatch.setattr(
         app,
@@ -170,11 +194,13 @@ def test_review_generation_does_not_consume_when_pdf_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="pdf failed"):
         app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
 
-    assert calls == ["summary", "context", "fortune", "pdf"]
+    assert calls == ["claim", "summary", "context", "fortune", "pdf", "release"]
 
 
 def test_review_generation_returns_no_result_when_consume_fails(monkeypatch):
     calls = []
+    allow_generation_claim(monkeypatch, calls)
+    track_generation_release(monkeypatch, calls)
 
     monkeypatch.setattr(
         app,
@@ -207,7 +233,30 @@ def test_review_generation_returns_no_result_when_consume_fails(monkeypatch):
     completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
 
     assert completed == {"status": "consume_failed"}
-    assert calls == ["summary", "context", "fortune", "pdf", "consume"]
+    assert calls == ["claim", "summary", "context", "fortune", "pdf", "consume", "release"]
+
+
+def test_review_generation_does_not_call_gemini_when_claim_fails(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIM_PROCESSING,
+    )
+    track_generation_release(monkeypatch, calls)
+    monkeypatch.setattr(
+        app,
+        "call_gemini_review_pdf_summary",
+        lambda pdf_bytes, analysis: calls.append("summary") or {"summary_success": True},
+    )
+
+    completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
+
+    assert completed == {
+        "status": "claim_failed",
+        "claim_status": app.GENERATION_CLAIM_PROCESSING,
+    }
+    assert calls == ["claim"]
 
 
 def test_review_validation_requires_birth_place():

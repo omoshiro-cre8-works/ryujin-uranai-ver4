@@ -1,0 +1,47 @@
+steps:
+  - id: validate-full-git-sha
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+
+        if [[ ! "${_FULL_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "_FULL_GIT_SHA must be a 40-character lowercase hexadecimal Git SHA."
+          exit 1
+        fi
+
+        if [[ "$PROJECT_ID" != "$_EXPECTED_PROJECT_ID" ]]; then
+          echo "PROJECT_ID does not match the approved Artifact Registry project."
+          exit 1
+        fi
+
+  - id: build-app-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --label
+      - org.opencontainers.image.source=https://github.com/omoshiro-cre8-works/ryujin-uranai-ver4
+      - --label
+      - org.opencontainers.image.revision=${_FULL_GIT_SHA}
+      - --label
+      - org.opencontainers.image.title=ai-uranai-h1
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_FULL_GIT_SHA}
+      - -f
+      - Dockerfile
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_FULL_GIT_SHA}
+
+substitutions:
+  _REGION: asia-northeast2
+  _REPOSITORY: cloud-run-source-deploy
+  _IMAGE: ai-uranai-h1
+  _EXPECTED_PROJECT_ID: gen-lang-client-0636169164
+  _FULL_GIT_SHA: MISSING_FULL_GIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY

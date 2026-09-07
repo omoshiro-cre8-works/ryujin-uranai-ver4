@@ -35,6 +35,80 @@ def test_regular_stripe_readiness_requires_regular_price(monkeypatch):
     assert not app.stripe_client_ready(app.PRODUCT_TYPE_REGULAR)
 
 
+def test_staging_invalid_stripe_mode_blocks_checkout_before_side_effects(monkeypatch):
+    calls = []
+    stripe_stub = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(
+                create=lambda **kwargs: calls.append(("stripe_create", kwargs)),
+            )
+        ),
+    )
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(
+        app,
+        "create_purchase_record",
+        lambda *args, **kwargs: calls.append(("create_purchase", args, kwargs)),
+    )
+
+    checkout_url, error = app.create_checkout_session(
+        app.PRODUCT_TYPE_REGULAR,
+        SimpleNamespace(error=lambda *args, **kwargs: None),
+    )
+
+    assert checkout_url is None
+    assert "STRIPE_MODE=test" in error
+    assert calls == []
+
+
+def test_retrieve_checkout_session_handles_environment_config_error(monkeypatch):
+    calls = []
+    stripe_stub = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(
+                retrieve=lambda session_id: calls.append(("retrieve", session_id)),
+            )
+        ),
+    )
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "stripe", stripe_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REVIEW", "price_review_test")
+
+    assert app.retrieve_checkout_session("cs_test_1") is None
+    assert calls == []
+
+
+def test_render_direct_checkout_handles_environment_config_error(monkeypatch):
+    rendered_errors = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.error = lambda value, **kwargs: rendered_errors.append(value)
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("STRIPE_MODE", raising=False)
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "SHOW_DEBUG", False)
+
+    app.render_direct_checkout(
+        app.PRODUCT_TYPE_REGULAR,
+        SimpleNamespace(error=lambda *args, **kwargs: None),
+    )
+
+    assert rendered_errors == ["ただいま決済ページを準備できません。時間をおいてもう一度お試しください。"]
+
+
 def test_review_checkout_price_uses_review_price_id(monkeypatch):
     monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
     monkeypatch.setattr(app, "STRIPE_PRICE_ID_REVIEW", "price_review_test")
@@ -146,6 +220,124 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     assert any("龍神さまのお告げ 見返し便" in value for value in rendered_markdown)
     assert any("680円" in value for value in rendered_markdown)
     assert any("見返し便フォーム" in value for value in rendered_info)
+
+
+def test_main_root_fallback_disables_checkout_creation(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "configure_logging", lambda: None)
+    monkeypatch.setattr(app, "render_app_css", lambda: None)
+    monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "update_ga4_identifiers_from_query", lambda: None)
+    monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
+    monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
+    monkeypatch.setattr(app, "is_direct_checkout_request", lambda: False)
+    monkeypatch.setattr(app, "get_current_purchase_record", lambda: None)
+    monkeypatch.setattr(app, "get_requested_product_type", lambda: app.PRODUCT_TYPE_REGULAR)
+    monkeypatch.setattr(app, "track_streamlit_page_view", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_notice_box", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_form_gap", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        app,
+        "render_payment_section",
+        lambda product_type, logger, allow_checkout_creation=True: calls.append(
+            ("payment_section", product_type, allow_checkout_creation)
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "render_direct_checkout",
+        lambda *args, **kwargs: calls.append(("unexpected_direct_checkout",)),
+    )
+    monkeypatch.setattr(
+        app,
+        "st",
+        SimpleNamespace(
+            set_page_config=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+            divider=lambda *args, **kwargs: None,
+        ),
+    )
+
+    app.main()
+
+    assert calls == [("payment_section", app.PRODUCT_TYPE_REGULAR, False)]
+
+
+def test_main_direct_checkout_still_uses_direct_checkout(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "configure_logging", lambda: None)
+    monkeypatch.setattr(app, "render_app_css", lambda: None)
+    monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "update_ga4_identifiers_from_query", lambda: None)
+    monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
+    monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
+    monkeypatch.setattr(app, "is_direct_checkout_request", lambda: True)
+    monkeypatch.setattr(app, "get_current_purchase_record", lambda: None)
+    monkeypatch.setattr(app, "get_requested_product_type", lambda: app.PRODUCT_TYPE_REGULAR)
+    monkeypatch.setattr(app, "track_streamlit_page_view", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        app,
+        "render_direct_checkout",
+        lambda product_type, logger: calls.append(("direct_checkout", product_type)),
+    )
+    monkeypatch.setattr(
+        app,
+        "render_payment_section",
+        lambda *args, **kwargs: calls.append(("unexpected_payment_section",)),
+    )
+    monkeypatch.setattr(
+        app,
+        "st",
+        SimpleNamespace(set_page_config=lambda *args, **kwargs: None),
+    )
+
+    app.main()
+
+    assert calls == [("direct_checkout", app.PRODUCT_TYPE_REGULAR)]
+
+
+def test_cancel_return_root_does_not_create_checkout_session(monkeypatch):
+    calls = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.query_params = {}
+    streamlit_stub.info = lambda value, **kwargs: calls.append(("info", value))
+
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "STRIPE_ENABLED", True)
+    monkeypatch.setattr(app, "get_current_purchase_record", lambda: None)
+    monkeypatch.setattr(
+        app,
+        "get_active_checkout_price",
+        lambda product_type, logger: ("price_regular", 300),
+    )
+    monkeypatch.setattr(app, "render_pre_payment_intro", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_usage_flow", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_sample_section", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_contents_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        app,
+        "create_checkout_session",
+        lambda *args, **kwargs: calls.append(("unexpected_checkout",)),
+    )
+    monkeypatch.setattr(
+        app,
+        "render_checkout_link",
+        lambda *args, **kwargs: calls.append(("unexpected_link",)),
+    )
+
+    result = app.render_payment_section(
+        app.PRODUCT_TYPE_REGULAR,
+        SimpleNamespace(),
+        allow_checkout_creation=False,
+    )
+
+    assert result is None
+    assert all(call[0] != "unexpected_checkout" for call in calls)
+    assert all(call[0] != "unexpected_link" for call in calls)
+    assert any(call[0] == "info" for call in calls)
 
 
 class AttrDict(dict):

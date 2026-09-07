@@ -44,13 +44,19 @@ from config import (
 )
 from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
+    GENERATION_CLAIMED,
+    GENERATION_CLAIM_PROCESSING,
+    claim_generation_transaction,
     consume_purchase_transaction,
     create_purchase_record as firestore_create_purchase_record,
     get_firestore_client,
+    get_purchase_collection,
     get_purchase_by_access_token,
     is_ga4_event_sent,
     mark_ga4_event_sent_if_unset,
+    release_generation_claim_transaction,
 )
+from stripe_webhook.environment_config import EnvironmentConfigError, get_stripe_settings
 from services.fortune_service import (
     build_image_parts,
     build_review_context,
@@ -356,6 +362,8 @@ def init_session_state() -> None:
         st.session_state.review_pdf_generated_purchase_id = None
     if "review_purchase_consumed" not in st.session_state:
         st.session_state.review_purchase_consumed = set()
+    if "generation_claim_status" not in st.session_state:
+        st.session_state.generation_claim_status = None
     for key, value in get_default_tracking_params().items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -924,7 +932,7 @@ def clear_checkout_session_state() -> None:
 
 def _purchase_doc_ref(purchase_id: str):
     db = get_firestore_client()
-    return db.collection("purchases").document(purchase_id)
+    return get_purchase_collection(db).document(purchase_id)
 
 
 def create_purchase_record(
@@ -1089,6 +1097,7 @@ def is_purchase_ready(record: dict[str, Any] | None) -> bool:
 def stripe_client_ready(product_type: str = PRODUCT_TYPE_REGULAR) -> bool:
     if not stripe or not STRIPE_SECRET_KEY:
         return False
+    get_stripe_settings(secret_key=STRIPE_SECRET_KEY)
     normalized_product_type = normalize_product_type(product_type)
     if normalized_product_type == PRODUCT_TYPE_REVIEW:
         if not STRIPE_PRICE_ID_REVIEW:
@@ -1101,7 +1110,13 @@ def stripe_client_ready(product_type: str = PRODUCT_TYPE_REGULAR) -> bool:
 
 def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[str | None, str | None]:
     product_type = normalize_product_type(product_type)
-    if not stripe_client_ready(product_type):
+    try:
+        is_stripe_ready = stripe_client_ready(product_type)
+    except EnvironmentConfigError as exc:
+        logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
+        return None, str(exc)
+
+    if not is_stripe_ready:
         if product_type == PRODUCT_TYPE_REVIEW:
             return None, "見返し便の決済設定がまだ完了していません。環境変数 STRIPE_REVIEW_PRICE_ID を確認してください。"
         return None, "Stripe の設定が不足しています。環境変数 STRIPE_SECRET_KEY / STRIPE_PRICE_ID_REGULAR を確認してください。"
@@ -1179,7 +1194,11 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
 def retrieve_checkout_session(session_id: str) -> Any | None:
     if not session_id:
         return None
-    if not stripe_client_ready(PRODUCT_TYPE_REGULAR) and not stripe_client_ready(PRODUCT_TYPE_REVIEW):
+    try:
+        stripe_ready = stripe_client_ready(PRODUCT_TYPE_REGULAR) or stripe_client_ready(PRODUCT_TYPE_REVIEW)
+    except EnvironmentConfigError:
+        return None
+    if not stripe_ready:
         return None
     try:
         assert stripe is not None
@@ -1253,14 +1272,77 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
     return True
 
 
+def claim_purchase_generation(purchase_id: str, logger: logging.Logger) -> str:
+    try:
+        status = claim_generation_transaction(
+            purchase_id,
+            str(st.session_state.get("active_access_token") or ""),
+        )
+    except Exception:
+        logger.exception(
+            "purchase_generation_claim_failed",
+            extra={"purchase_id": purchase_id},
+        )
+        st.session_state.generation_claim_status = "error"
+        return "error"
+
+    if status == GENERATION_CLAIMED:
+        logger.info(
+            "purchase_generation_claimed",
+            extra={"env": APP_ENV, "purchase_id": purchase_id},
+        )
+    elif status == GENERATION_CLAIM_PROCESSING:
+        logger.info(
+            "purchase_generation_already_processing",
+            extra={"env": APP_ENV, "purchase_id": purchase_id},
+        )
+    else:
+        logger.warning(
+            "purchase_generation_claim_rejected",
+            extra={"env": APP_ENV, "purchase_id": purchase_id, "claim_status": status},
+        )
+    st.session_state.generation_claim_status = status
+    return status
+
+
+def release_purchase_generation_claim(purchase_id: str, logger: logging.Logger) -> None:
+    try:
+        released = release_generation_claim_transaction(
+            purchase_id,
+            str(st.session_state.get("active_access_token") or ""),
+        )
+    except Exception:
+        logger.exception(
+            "purchase_generation_claim_release_failed",
+            extra={"purchase_id": purchase_id},
+        )
+        return
+
+    if released:
+        logger.info(
+            "purchase_generation_claim_released",
+            extra={"env": APP_ENV, "purchase_id": purchase_id},
+        )
+
+
 def generate_regular_fortune_pdf_and_consume(
     payload: FortuneInput,
     purchase_id: str,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bytes] | None:
-    result = call_gemini_fortune(payload)
-    pdf_data = generate_miko_letter_pdf(payload.user_name, result)
+    claim_status = claim_purchase_generation(purchase_id, logger)
+    if claim_status != GENERATION_CLAIMED:
+        return None
+
+    try:
+        result = call_gemini_fortune(payload)
+        pdf_data = generate_miko_letter_pdf(payload.user_name, result)
+    except Exception:
+        release_purchase_generation_claim(purchase_id, logger)
+        raise
+
     if not consume_purchase(purchase_id, logger):
+        release_purchase_generation_claim(purchase_id, logger)
         return None
     return result, pdf_data
 
@@ -1274,35 +1356,47 @@ def generate_review_fortune_pdf_and_consume(
     purchase_id: str,
     logger: logging.Logger,
 ) -> dict[str, Any]:
-    pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
-    if not pdf_summary.get("summary_success"):
-        return {
-            "status": "summary_failed",
-            "pdf_summary": pdf_summary,
-        }
+    claim_status = claim_purchase_generation(purchase_id, logger)
+    if claim_status != GENERATION_CLAIMED:
+        return {"status": "claim_failed", "claim_status": claim_status}
 
-    review_context = build_review_context(
-        pdf_analysis=pdf_analysis,
-        previous_summary=pdf_summary.get("previous_summary") or {},
-        current_inputs=current_inputs,
-    )
-    review_fortune_result = call_gemini_review_fortune(
-        review_context=review_context,
-        current_private_inputs=current_private_inputs,
-        image_parts=image_parts,
-    )
-    if not review_fortune_result.get("fortune_success"):
-        return {
-            "status": "fortune_failed",
-            "review_fortune_result": review_fortune_result,
-        }
+    try:
+        pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
+        if not pdf_summary.get("summary_success"):
+            release_purchase_generation_claim(purchase_id, logger)
+            return {
+                "status": "summary_failed",
+                "pdf_summary": pdf_summary,
+            }
 
-    review_fortune = review_fortune_result.get("review_fortune") or {}
-    pdf_data = generate_review_fortune_pdf(
-        review_fortune=review_fortune,
-        review_context=review_context,
-    )
+        review_context = build_review_context(
+            pdf_analysis=pdf_analysis,
+            previous_summary=pdf_summary.get("previous_summary") or {},
+            current_inputs=current_inputs,
+        )
+        review_fortune_result = call_gemini_review_fortune(
+            review_context=review_context,
+            current_private_inputs=current_private_inputs,
+            image_parts=image_parts,
+        )
+        if not review_fortune_result.get("fortune_success"):
+            release_purchase_generation_claim(purchase_id, logger)
+            return {
+                "status": "fortune_failed",
+                "review_fortune_result": review_fortune_result,
+            }
+
+        review_fortune = review_fortune_result.get("review_fortune") or {}
+        pdf_data = generate_review_fortune_pdf(
+            review_fortune=review_fortune,
+            review_context=review_context,
+        )
+    except Exception:
+        release_purchase_generation_claim(purchase_id, logger)
+        raise
+
     if not consume_purchase(purchase_id, logger):
+        release_purchase_generation_claim(purchase_id, logger)
         return {"status": "consume_failed"}
 
     return {
@@ -1387,7 +1481,16 @@ def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
     product_type = normalize_product_type(product_type)
     _, active_amount_jpy = get_active_checkout_price(product_type, logger)
 
-    if not stripe_client_ready(product_type):
+    try:
+        is_stripe_ready = stripe_client_ready(product_type)
+    except EnvironmentConfigError as exc:
+        logger.error("stripe_environment_config_error", extra={"reason": str(exc)})
+        st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
+        if SHOW_DEBUG:
+            st.caption(str(exc))
+        return
+
+    if not is_stripe_ready:
         st.error("ただいま決済ページを準備できません。時間をおいてもう一度お試しください。")
         return
 
@@ -2122,6 +2225,15 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     )
                 return
 
+            if completed.get("status") == "claim_failed":
+                if completed.get("claim_status") == GENERATION_CLAIM_PROCESSING:
+                    st.info("現在処理中です。完了までお待ちください。")
+                else:
+                    st.error("購入権の確認に失敗しました。")
+                    st.error("ページを更新せず、時間をおいて再度お試しください。")
+                    st.error("解消しない場合は、お問い合わせください。")
+                return
+
             if completed.get("status") == "summary_failed":
                 st.error("前回PDFの要約中にエラーが発生しました。")
                 st.error("時間をおいてもう一度お試しください。")
@@ -2510,8 +2622,11 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                     )
 
                 if completed is None:
-                    st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
-                    st.error("解消しない場合は、お問い合わせください。")
+                    if st.session_state.get("generation_claim_status") == GENERATION_CLAIM_PROCESSING:
+                        st.info("現在処理中です。完了までお待ちください。")
+                    else:
+                        st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
+                        st.error("解消しない場合は、お問い合わせください。")
                     return
 
                 result, pdf_data = completed
@@ -2651,7 +2766,7 @@ def main() -> None:
     render_payment_section(
         display_product_type,
         logger,
-        allow_checkout_creation=not purchase_return_requested,
+        allow_checkout_creation=False,
     )
     render_notice_box()
     render_form_gap(2)
