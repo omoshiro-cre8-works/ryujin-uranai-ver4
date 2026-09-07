@@ -11,7 +11,6 @@ from config import GEMINI_MODEL, get_gemini_api_key
 from models.schemas import AppConfigError, FORTUNE_RESPONSE_JSON_SCHEMA, FortuneInput
 from services.formatter_service import normalize_fortune_result
 from services.prompt_service import build_system_instruction, build_user_prompt
-from services.validation_service import get_mime_type
 
 logger = logging.getLogger(__name__)
 _client: genai.Client | None = None
@@ -289,9 +288,12 @@ def get_gemini_client(api_key: str) -> genai.Client:
 def build_image_parts(uploaded_files: list[Any]) -> list[Any]:
     parts: list[Any] = []
     for uploaded_file in uploaded_files:
-        file_bytes = uploaded_file.getvalue()
-        mime_type = get_mime_type(uploaded_file.name)
-        parts.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+        parts.append(
+            types.Part.from_bytes(
+                data=uploaded_file.jpeg_bytes,
+                mime_type=uploaded_file.mime_type,
+            )
+        )
     return parts
 
 
@@ -1319,7 +1321,10 @@ def call_gemini_fortune(data: FortuneInput) -> dict[str, Any]:
     contents: list[Any] = [build_user_prompt(data)]
     contents.extend(data.image_parts)
 
-    logger.info('gemini_request_started', extra={'model': GEMINI_MODEL, 'image_count': data.image_count})
+    logger.info(
+        f'gemini_request_started image_count={data.image_count}',
+        extra={'model': GEMINI_MODEL, 'image_count': data.image_count},
+    )
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=contents,

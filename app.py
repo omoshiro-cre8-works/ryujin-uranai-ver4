@@ -10,6 +10,7 @@ import secrets
 import sys
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -66,6 +67,7 @@ from services.fortune_service import (
 )
 from services.ga4_service import send_ga4_event
 from services.ga4_service import send_ga4_event_with_status
+from services.image_service import ImageProcessingError, normalize_uploaded_images, validate_uploaded_images_lightweight
 from services.pdf_service import (
     format_review_comparison_blocks,
     generate_miko_letter_pdf,
@@ -363,6 +365,14 @@ def init_session_state() -> None:
         st.session_state.review_purchase_consumed = set()
     if "generation_claim_status" not in st.session_state:
         st.session_state.generation_claim_status = None
+    if "regular_palm_images_purchase_id" not in st.session_state:
+        st.session_state.regular_palm_images_purchase_id = None
+    if "regular_palm_images_signature" not in st.session_state:
+        st.session_state.regular_palm_images_signature = None
+    if "regular_palm_images_normalized" not in st.session_state:
+        st.session_state.regular_palm_images_normalized = []
+    if "regular_palm_images_hand_sides" not in st.session_state:
+        st.session_state.regular_palm_images_hand_sides = []
     for key, value in get_default_tracking_params().items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -927,6 +937,36 @@ def get_active_checkout_price(product_type: str, logger: logging.Logger | None =
 def clear_checkout_session_state() -> None:
     st.session_state.checkout_url = None
     st.session_state.checkout_product_type = None
+
+
+def build_uploaded_files_signature(uploaded_files: list[Any]) -> str | None:
+    if not uploaded_files:
+        return None
+
+    digest = hashlib.sha256()
+    for uploaded_file in uploaded_files:
+        name = str(getattr(uploaded_file, "name", "") or "")
+        size = str(getattr(uploaded_file, "size", "") or "")
+        digest.update(name.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update(size.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        try:
+            data = uploaded_file.getvalue()
+        except Exception:
+            data = b""
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        digest.update(hashlib.sha256(data).digest())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def clear_regular_palm_image_cache() -> None:
+    st.session_state.regular_palm_images_purchase_id = None
+    st.session_state.regular_palm_images_signature = None
+    st.session_state.regular_palm_images_normalized = []
+    st.session_state.regular_palm_images_hand_sides = []
 
 
 def _purchase_doc_ref(purchase_id: str):
@@ -2039,15 +2079,29 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     )
     uploaded_files = st.file_uploader(
         f"現在の手相画像（最大 {MAX_IMAGE_FILES} 枚 / 1枚 {MAX_IMAGE_SIZE_MB}MBまで）",
-        type=["png", "jpg", "jpeg"],
+        type=["png", "jpg", "jpeg", "heic", "heif"],
         accept_multiple_files=True,
         key="review_palm_images",
     )
 
-    hand_sides = []
+    image_error: ImageProcessingError | None = None
+    normalized_images = []
     if uploaded_files:
+        try:
+            validate_uploaded_images_lightweight(uploaded_files, require_files=False)
+            normalized_images = normalize_uploaded_images(uploaded_files)
+        except ImageProcessingError as exc:
+            image_error = exc
+            logger.info(
+                "image_processing_rejected",
+                extra={"stage": "pre_submit", "error_code": exc.code, "product_type": product_type},
+            )
+            st.error(exc.user_message)
+
+    hand_sides = []
+    if normalized_images:
         st.markdown('<div class="input-help">各画像の左右を選んでください。</div>', unsafe_allow_html=True)
-        hand_sides = build_selected_hand_sides(uploaded_files)
+        hand_sides = build_selected_hand_sides(normalized_images)
 
     render_form_gap(2)
 
@@ -2089,7 +2143,11 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
     review_submit_clicked = False
     if not review_generation_completed:
         with review_submit_placeholder:
-            review_submit_clicked = st.button("🐉 見返し便の鑑定本文を生成する", key="review_submit")
+            review_submit_clicked = st.button(
+                "🐉 見返し便の鑑定本文を生成する",
+                key="review_submit",
+                disabled=image_error is not None,
+            )
 
     if review_submit_clicked:
         st.session_state.review_context = None
@@ -2121,6 +2179,9 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             for err in list(dict.fromkeys(errors)):
                 st.error(err)
         else:
+            if image_error is not None:
+                st.error(image_error.user_message)
+                return
             uploaded_pdf_bytes = uploaded_pdf.getvalue()
             with st.spinner("前回PDFを確認しています..."):
                 pdf_analysis = validate_review_pdf_content(uploaded_pdf_bytes)
@@ -2139,14 +2200,14 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 return
 
             try:
-                image_parts = build_image_parts(uploaded_files or [])
+                image_parts = build_image_parts(normalized_images)
             except Exception as exc:
                 st.error("現在の手相画像の読み込み中にエラーが発生しました。")
                 if SHOW_DEBUG:
                     st.caption(f"error_type={type(exc).__name__} / failed_step=build_image_parts")
                 return
 
-            palm_image_count = len(uploaded_files or [])
+            palm_image_count = len(normalized_images)
             current_inputs = {
                 "birth_place": normalize_text(review_birth_place),
                 "birth_time_accuracy": review_birth_time_accuracy,
@@ -2491,14 +2552,44 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
 
     uploaded_files = st.file_uploader(
         f"手相の写真（最大 {MAX_IMAGE_FILES} 枚 / 1枚 {MAX_IMAGE_SIZE_MB}MBまで）",
-        type=["png", "jpg", "jpeg"],
+        type=["png", "jpg", "jpeg", "heic", "heif"],
         accept_multiple_files=True,
     )
 
-    hand_sides = []
+    purchase_cache_id = str(purchase_id or "")
+    if st.session_state.get("regular_palm_images_purchase_id") != purchase_cache_id:
+        clear_regular_palm_image_cache()
+
+    image_error: ImageProcessingError | None = None
+    normalized_images = []
+    uploaded_files_signature = build_uploaded_files_signature(uploaded_files or [])
     if uploaded_files:
+        try:
+            validate_uploaded_images_lightweight(uploaded_files, require_files=False)
+            normalized_images = normalize_uploaded_images(uploaded_files)
+            st.session_state.regular_palm_images_purchase_id = purchase_cache_id
+            st.session_state.regular_palm_images_signature = uploaded_files_signature
+            st.session_state.regular_palm_images_normalized = normalized_images
+            st.session_state.regular_palm_images_hand_sides = []
+        except ImageProcessingError as exc:
+            clear_regular_palm_image_cache()
+            image_error = exc
+            logger.info(
+                "image_processing_rejected",
+                extra={"stage": "pre_submit", "error_code": exc.code, "product_type": product_type},
+            )
+            st.error(exc.user_message)
+    elif st.session_state.get("regular_palm_images_purchase_id") == purchase_cache_id:
+        normalized_images = st.session_state.get("regular_palm_images_normalized") or []
+
+    hand_sides = []
+    if normalized_images:
         st.markdown('<div class="input-help">各画像の左右を選んでください。</div>', unsafe_allow_html=True)
-        hand_sides = build_selected_hand_sides(uploaded_files)
+        if uploaded_files:
+            hand_sides = build_selected_hand_sides(normalized_images)
+            st.session_state.regular_palm_images_hand_sides = hand_sides
+        else:
+            hand_sides = st.session_state.get("regular_palm_images_hand_sides") or []
 
     render_form_gap(2)
 
@@ -2515,7 +2606,9 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
     regular_submit_clicked = False
     if not regular_generation_completed:
         with regular_submit_placeholder:
-            regular_submit_clicked = st.button("🐉 龍神さまのお告げを聞く")
+            regular_submit_clicked = st.button("🐉 龍神さまのお告げを聞く", disabled=image_error is not None)
+    if not uploaded_files and not regular_submit_clicked:
+        clear_regular_palm_image_cache()
 
     if regular_submit_clicked:
         st.session_state.fortune_json = None
@@ -2526,6 +2619,10 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
             st.stop()
 
+        validation_uploaded_files = uploaded_files or [
+            SimpleNamespace(name=file.original_name, size=file.original_size_bytes)
+            for file in normalized_images
+        ]
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,
@@ -2534,7 +2631,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
             birth_time_accuracy=birth_time_accuracy,
             birth_hour=birth_hour,
             birth_minute=birth_minute,
-            uploaded_files=uploaded_files or [],
+            uploaded_files=validation_uploaded_files,
             hand_sides=hand_sides,
         )
 
@@ -2546,11 +2643,14 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
             for err in list(dict.fromkeys(errors)):
                 st.error(err)
         else:
+            if image_error is not None:
+                st.error(image_error.user_message)
+                return
             try:
-                image_parts = build_image_parts(uploaded_files or [])
+                image_parts = build_image_parts(normalized_images)
                 image_meta = [
-                    PalmImageMeta(filename=file.name, hand_side=hand_sides[idx])
-                    for idx, file in enumerate(uploaded_files or [])
+                    PalmImageMeta(filename=file.original_name, hand_side=hand_sides[idx])
+                    for idx, file in enumerate(normalized_images)
                 ]
 
                 payload = FortuneInput(
