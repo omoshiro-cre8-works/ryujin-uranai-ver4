@@ -10,6 +10,7 @@ import secrets
 import sys
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -364,6 +365,14 @@ def init_session_state() -> None:
         st.session_state.review_purchase_consumed = set()
     if "generation_claim_status" not in st.session_state:
         st.session_state.generation_claim_status = None
+    if "regular_palm_images_purchase_id" not in st.session_state:
+        st.session_state.regular_palm_images_purchase_id = None
+    if "regular_palm_images_signature" not in st.session_state:
+        st.session_state.regular_palm_images_signature = None
+    if "regular_palm_images_normalized" not in st.session_state:
+        st.session_state.regular_palm_images_normalized = []
+    if "regular_palm_images_hand_sides" not in st.session_state:
+        st.session_state.regular_palm_images_hand_sides = []
     for key, value in get_default_tracking_params().items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -928,6 +937,36 @@ def get_active_checkout_price(product_type: str, logger: logging.Logger | None =
 def clear_checkout_session_state() -> None:
     st.session_state.checkout_url = None
     st.session_state.checkout_product_type = None
+
+
+def build_uploaded_files_signature(uploaded_files: list[Any]) -> str | None:
+    if not uploaded_files:
+        return None
+
+    digest = hashlib.sha256()
+    for uploaded_file in uploaded_files:
+        name = str(getattr(uploaded_file, "name", "") or "")
+        size = str(getattr(uploaded_file, "size", "") or "")
+        digest.update(name.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update(size.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        try:
+            data = uploaded_file.getvalue()
+        except Exception:
+            data = b""
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        digest.update(hashlib.sha256(data).digest())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def clear_regular_palm_image_cache() -> None:
+    st.session_state.regular_palm_images_purchase_id = None
+    st.session_state.regular_palm_images_signature = None
+    st.session_state.regular_palm_images_normalized = []
+    st.session_state.regular_palm_images_hand_sides = []
 
 
 def _purchase_doc_ref(purchase_id: str):
@@ -2517,24 +2556,40 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
         accept_multiple_files=True,
     )
 
+    purchase_cache_id = str(purchase_id or "")
+    if st.session_state.get("regular_palm_images_purchase_id") != purchase_cache_id:
+        clear_regular_palm_image_cache()
+
     image_error: ImageProcessingError | None = None
     normalized_images = []
+    uploaded_files_signature = build_uploaded_files_signature(uploaded_files or [])
     if uploaded_files:
         try:
             validate_uploaded_images_lightweight(uploaded_files, require_files=False)
             normalized_images = normalize_uploaded_images(uploaded_files)
+            st.session_state.regular_palm_images_purchase_id = purchase_cache_id
+            st.session_state.regular_palm_images_signature = uploaded_files_signature
+            st.session_state.regular_palm_images_normalized = normalized_images
+            st.session_state.regular_palm_images_hand_sides = []
         except ImageProcessingError as exc:
+            clear_regular_palm_image_cache()
             image_error = exc
             logger.info(
                 "image_processing_rejected",
                 extra={"stage": "pre_submit", "error_code": exc.code, "product_type": product_type},
             )
             st.error(exc.user_message)
+    elif st.session_state.get("regular_palm_images_purchase_id") == purchase_cache_id:
+        normalized_images = st.session_state.get("regular_palm_images_normalized") or []
 
     hand_sides = []
     if normalized_images:
         st.markdown('<div class="input-help">各画像の左右を選んでください。</div>', unsafe_allow_html=True)
-        hand_sides = build_selected_hand_sides(normalized_images)
+        if uploaded_files:
+            hand_sides = build_selected_hand_sides(normalized_images)
+            st.session_state.regular_palm_images_hand_sides = hand_sides
+        else:
+            hand_sides = st.session_state.get("regular_palm_images_hand_sides") or []
 
     render_form_gap(2)
 
@@ -2552,6 +2607,8 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
     if not regular_generation_completed:
         with regular_submit_placeholder:
             regular_submit_clicked = st.button("🐉 龍神さまのお告げを聞く", disabled=image_error is not None)
+    if not uploaded_files and not regular_submit_clicked:
+        clear_regular_palm_image_cache()
 
     if regular_submit_clicked:
         st.session_state.fortune_json = None
@@ -2562,6 +2619,10 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
             st.stop()
 
+        validation_uploaded_files = uploaded_files or [
+            SimpleNamespace(name=file.original_name, size=file.original_size_bytes)
+            for file in normalized_images
+        ]
         errors = validate_inputs(
             user_name=user_name,
             birth_place=birth_place,
@@ -2570,7 +2631,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
             birth_time_accuracy=birth_time_accuracy,
             birth_hour=birth_hour,
             birth_minute=birth_minute,
-            uploaded_files=uploaded_files or [],
+            uploaded_files=validation_uploaded_files,
             hand_sides=hand_sides,
         )
 

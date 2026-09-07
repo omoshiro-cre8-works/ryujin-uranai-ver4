@@ -1321,7 +1321,10 @@ def call_gemini_fortune(data: FortuneInput) -> dict[str, Any]:
     contents: list[Any] = [build_user_prompt(data)]
     contents.extend(data.image_parts)
 
-    logger.info('gemini_request_started', extra={'model': GEMINI_MODEL, 'image_count': data.image_count})
+    logger.info(
+        f'gemini_request_started image_count={data.image_count}',
+        extra={'model': GEMINI_MODEL, 'image_count': data.image_count},
+    )
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=contents,
