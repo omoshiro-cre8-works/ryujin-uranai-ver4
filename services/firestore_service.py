@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -258,6 +259,10 @@ def _datetime_is_future(value: Any, now: datetime | None = None) -> bool:
         return False
 
 
+def _valid_pdf_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
 def can_recover_purchase_pdf(
     purchase: Dict[str, Any] | None,
     access_token: str,
@@ -268,10 +273,11 @@ def can_recover_purchase_pdf(
         purchase
         and purchase.get("payment_status") == "paid"
         and purchase.get("used_flag") is True
-        and purchase.get("generation_processing") is not True
+        and purchase.get("generation_processing") is False
         and purchase.get("pdf_status") == PDF_STATUS_READY
         and isinstance(purchase.get("pdf_object_path"), str)
         and bool(purchase.get("pdf_object_path"))
+        and _valid_pdf_sha256(purchase.get("pdf_sha256"))
         and _access_token_matches(purchase, access_token)
         and _datetime_is_future(purchase.get("pdf_expires_at"), now)
     )

@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,6 +221,12 @@ SAMPLE_PDF_IMAGE_PATHS = [
     ASSETS_DIR / "sample_pdf_2.png",
     ASSETS_DIR / "sample_pdf_3.png",
 ]
+GENERATION_RELEASE_RETRY_ATTEMPTS = 3
+GENERATION_RELEASE_RETRY_DELAY_SECONDS = 0.2
+
+
+class GenerationReleaseError(RuntimeError):
+    pass
 
 
 def read_image_bytes(image_path: str | Path) -> bytes | None:
@@ -1309,6 +1316,12 @@ def prepare_pdf_recovery_metadata(
     logger: logging.Logger,
 ) -> dict[str, Any] | None:
     if not is_pdf_recovery_enabled():
+        log_warning = getattr(logger, "warning", None)
+        if log_warning:
+            log_warning(
+                "pdf_recovery_disabled_bucket_unset",
+                extra={"purchase_ref": mask_purchase_id(purchase_id)},
+            )
         return None
 
     record = get_purchase_record(purchase_id)
@@ -1408,24 +1421,52 @@ def claim_purchase_generation(purchase_id: str, logger: logging.Logger) -> str:
     return status
 
 
-def release_purchase_generation_claim(purchase_id: str, logger: logging.Logger) -> None:
-    try:
-        released = release_generation_claim_transaction(
-            purchase_id,
-            str(st.session_state.get("active_access_token") or ""),
-        )
-    except Exception:
-        logger.exception(
-            "purchase_generation_claim_release_failed",
-            extra={"purchase_id": purchase_id},
-        )
-        return
+def release_purchase_generation_claim(purchase_id: str, logger: logging.Logger) -> bool:
+    access_token = str(st.session_state.get("active_access_token") or "")
+    for attempt in range(1, GENERATION_RELEASE_RETRY_ATTEMPTS + 1):
+        try:
+            released = release_generation_claim_transaction(purchase_id, access_token)
+        except Exception:
+            logger.warning(
+                "purchase_generation_claim_release_retry",
+                extra={
+                    "env": APP_ENV,
+                    "purchase_ref": mask_purchase_id(purchase_id),
+                    "attempt": attempt,
+                },
+                exc_info=True,
+            )
+            released = False
 
-    if released:
-        logger.info(
-            "purchase_generation_claim_released",
-            extra={"env": APP_ENV, "purchase_id": purchase_id},
-        )
+        if released:
+            logger.info(
+                "purchase_generation_claim_released",
+                extra={
+                    "env": APP_ENV,
+                    "purchase_ref": mask_purchase_id(purchase_id),
+                    "attempt": attempt,
+                },
+            )
+            return True
+
+        if attempt < GENERATION_RELEASE_RETRY_ATTEMPTS:
+            time.sleep(GENERATION_RELEASE_RETRY_DELAY_SECONDS)
+
+    logger.error(
+        "generation_release_failed",
+        extra={
+            "env": APP_ENV,
+            "purchase_ref": mask_purchase_id(purchase_id),
+            "attempts": GENERATION_RELEASE_RETRY_ATTEMPTS,
+        },
+    )
+    return False
+
+
+def release_generation_claim_after_failure(purchase_id: str, logger: logging.Logger) -> None:
+    released = release_purchase_generation_claim(purchase_id, logger)
+    if released is False:
+        raise GenerationReleaseError("処理状態の更新に失敗しました。時間をおいて再度アクセスしてください。")
 
 
 def generate_regular_fortune_pdf_and_consume(
@@ -1441,8 +1482,10 @@ def generate_regular_fortune_pdf_and_consume(
         result = call_gemini_fortune(payload)
         pdf_data = generate_miko_letter_pdf(payload.user_name, result)
         pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
+    except GenerationReleaseError:
+        raise
     except Exception:
-        release_purchase_generation_claim(purchase_id, logger)
+        release_generation_claim_after_failure(purchase_id, logger)
         raise
 
     consumed = (
@@ -1451,7 +1494,7 @@ def generate_regular_fortune_pdf_and_consume(
         else consume_purchase(purchase_id, logger)
     )
     if not consumed:
-        release_purchase_generation_claim(purchase_id, logger)
+        release_generation_claim_after_failure(purchase_id, logger)
         return None
     return result, pdf_data
 
@@ -1472,7 +1515,7 @@ def generate_review_fortune_pdf_and_consume(
     try:
         pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
         if not pdf_summary.get("summary_success"):
-            release_purchase_generation_claim(purchase_id, logger)
+            release_generation_claim_after_failure(purchase_id, logger)
             return {
                 "status": "summary_failed",
                 "pdf_summary": pdf_summary,
@@ -1489,7 +1532,7 @@ def generate_review_fortune_pdf_and_consume(
             image_parts=image_parts,
         )
         if not review_fortune_result.get("fortune_success"):
-            release_purchase_generation_claim(purchase_id, logger)
+            release_generation_claim_after_failure(purchase_id, logger)
             return {
                 "status": "fortune_failed",
                 "review_fortune_result": review_fortune_result,
@@ -1501,8 +1544,10 @@ def generate_review_fortune_pdf_and_consume(
             review_context=review_context,
         )
         pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
+    except GenerationReleaseError:
+        raise
     except Exception:
-        release_purchase_generation_claim(purchase_id, logger)
+        release_generation_claim_after_failure(purchase_id, logger)
         raise
 
     consumed = (
@@ -1511,7 +1556,7 @@ def generate_review_fortune_pdf_and_consume(
         else consume_purchase(purchase_id, logger)
     )
     if not consumed:
-        release_purchase_generation_claim(purchase_id, logger)
+        release_generation_claim_after_failure(purchase_id, logger)
         return {"status": "consume_failed"}
 
     return {
