@@ -1310,6 +1310,27 @@ def mask_purchase_id(purchase_id: str | None) -> str:
     return f"{value[:6]}...{value[-4:]}"
 
 
+def is_production_app_env() -> bool:
+    return str(APP_ENV or "").strip().lower() in {"production", "prod"}
+
+
+def ensure_pdf_recovery_configured_for_generation(
+    purchase_id: str,
+    logger: logging.Logger,
+) -> bool:
+    if not is_production_app_env() or is_pdf_recovery_enabled():
+        return True
+
+    logger.error(
+        "pdf_recovery_configuration_missing",
+        extra={
+            "env": APP_ENV,
+            "purchase_ref": mask_purchase_id(purchase_id),
+        },
+    )
+    return False
+
+
 def prepare_pdf_recovery_metadata(
     purchase_id: str,
     pdf_data: bytes,
@@ -1479,6 +1500,9 @@ def generate_regular_fortune_pdf_and_consume(
         return None
 
     try:
+        if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+            release_generation_claim_after_failure(purchase_id, logger)
+            return None
         result = call_gemini_fortune(payload)
         pdf_data = generate_miko_letter_pdf(payload.user_name, result)
         pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
@@ -1513,6 +1537,9 @@ def generate_review_fortune_pdf_and_consume(
         return {"status": "claim_failed", "claim_status": claim_status}
 
     try:
+        if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+            release_generation_claim_after_failure(purchase_id, logger)
+            return {"status": "configuration_error"}
         pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
         if not pdf_summary.get("summary_success"):
             release_generation_claim_after_failure(purchase_id, logger)

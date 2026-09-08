@@ -93,17 +93,109 @@ def test_prepare_pdf_recovery_metadata_is_disabled_when_env_missing(monkeypatch)
 def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monkeypatch):
     calls = []
     payload = SimpleNamespace(user_name="テストユーザー")
-    monkeypatch.setattr(app, "claim_purchase_generation", lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
     monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release"))
     monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
     monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or {"pdf_status": "ready"})
-    monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True)
+    monkeypatch.setattr(
+        app,
+        "consume_purchase",
+        lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True,
+    )
 
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", SimpleNamespace())
 
     assert completed == ({"miko_intro": "result"}, b"pdf")
     assert calls == ["claim", "gemini", "pdf", "upload", ("consume", {"pdf_status": "ready"})]
+
+
+def test_regular_generation_production_missing_bucket_releases_without_pdf_or_consume(monkeypatch):
+    calls = []
+    purchase_state = {"used_flag": False, "generation_processing": True}
+    payload = SimpleNamespace(user_name="テストユーザー")
+    logger = RecordingLogger()
+
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+
+    def release(purchase_id, logger):
+        calls.append("release")
+        purchase_state["generation_processing"] = False
+        return True
+
+    monkeypatch.setattr(app, "release_purchase_generation_claim", release)
+    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
+    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+
+    completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", logger)
+
+    assert completed is None
+    assert calls == ["claim", "release"]
+    assert purchase_state == {"used_flag": False, "generation_processing": False}
+    assert any(call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing" for call in logger.calls)
+
+
+def test_regular_generation_production_missing_bucket_release_failure_raises(monkeypatch):
+    calls = []
+    payload = SimpleNamespace(user_name="テストユーザー")
+
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+    monkeypatch.setattr(
+        app,
+        "release_purchase_generation_claim",
+        lambda purchase_id, logger: calls.append("release") or False,
+    )
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+
+    with pytest.raises(app.GenerationReleaseError):
+        app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
+
+    assert calls == ["claim", "release"]
+
+
+def test_regular_generation_staging_missing_bucket_preserves_fallback_consume(monkeypatch):
+    calls = []
+    payload = SimpleNamespace(user_name="テストユーザー")
+    monkeypatch.setattr(app, "APP_ENV", "staging")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+    monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release"))
+    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
+    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("fallback") or None)
+    monkeypatch.setattr(
+        app,
+        "consume_purchase",
+        lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True,
+    )
+
+    completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
+
+    assert completed == ({"miko_intro": "result"}, b"pdf")
+    assert calls == ["claim", "gemini", "pdf", "fallback", ("consume", None)]
 
 
 def test_regular_generation_releases_claim_and_does_not_consume_when_upload_fails(monkeypatch):
@@ -310,7 +402,13 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
     calls = []
     review_context = {"review_context": {"current_inputs": {}}}
     review_fortune = {"intro": "result"}
-    monkeypatch.setattr(app, "claim_purchase_generation", lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED)
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
     monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release") or True)
     monkeypatch.setattr(
         app,
@@ -343,3 +441,46 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
         "upload",
         ("consume", {"pdf_status": "ready"}),
     ]
+
+
+def test_review_generation_production_missing_bucket_releases_without_pdf_or_consume(monkeypatch):
+    calls = []
+    purchase_state = {"used_flag": False, "generation_processing": True}
+    logger = RecordingLogger()
+
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+
+    def release(purchase_id, logger):
+        calls.append("release")
+        purchase_state["generation_processing"] = False
+        return True
+
+    monkeypatch.setattr(app, "release_purchase_generation_claim", release)
+    monkeypatch.setattr(
+        app,
+        "call_gemini_review_pdf_summary",
+        lambda *args, **kwargs: calls.append("summary") or {"summary_success": True},
+    )
+    monkeypatch.setattr(app, "generate_review_fortune_pdf", lambda **kwargs: calls.append("pdf") or b"review-pdf")
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+
+    completed = app.generate_review_fortune_pdf_and_consume(
+        uploaded_pdf_bytes=b"previous-pdf",
+        pdf_analysis={"is_valid_previous_pdf": True},
+        current_inputs={},
+        current_private_inputs={},
+        image_parts=[],
+        purchase_id="p_review",
+        logger=logger,
+    )
+
+    assert completed == {"status": "configuration_error"}
+    assert calls == ["claim", "release"]
+    assert purchase_state == {"used_flag": False, "generation_processing": False}
+    assert any(call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing" for call in logger.calls)
