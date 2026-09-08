@@ -8,6 +8,17 @@ from services.image_service import ImageProcessingError, NormalizedPalmImage
 from services.validation_service import validate_inputs
 
 
+class RecordingLogger:
+    def __init__(self):
+        self.calls = []
+
+    def info(self, *args, **kwargs):
+        self.calls.append(("info", args, kwargs))
+
+    def error(self, *args, **kwargs):
+        self.calls.append(("error", args, kwargs))
+
+
 class AttrDict(dict):
     def __getattr__(self, key):
         try:
@@ -100,6 +111,7 @@ class StreamlitStub:
         self.warnings.append(args[0] if args else "")
 
     def success(self, *args, **kwargs):
+        self.session_state.setdefault("success_calls", []).append(args[0] if args else "")
         return None
 
     def image(self, *args, **kwargs):
@@ -372,6 +384,46 @@ def test_regular_valid_image_can_enter_submit_path(monkeypatch):
     assert "regular_generate" in calls
 
 
+def test_regular_production_missing_bucket_stops_before_reading_started_and_generation(monkeypatch):
+    calls = []
+    streamlit_stub = StreamlitStub([], click_submit=True)
+    logger = RecordingLogger()
+    purchase = {
+        "purchase_id": "p_test",
+        "payment_status": "paid",
+        "used_flag": False,
+        "generation_processing": False,
+    }
+    patch_common(monkeypatch, streamlit_stub, calls)
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: purchase)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda *args, **kwargs: calls.append("claim"),
+    )
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume"))
+
+    app.render_fortune_form(purchase, logger)
+
+    assert "reading_started" not in calls
+    assert "regular_generate" not in calls
+    assert "claim" not in calls
+    assert "consume" not in calls
+    assert purchase["used_flag"] is False
+    assert purchase["generation_processing"] is False
+    assert streamlit_stub.session_state.fortune_json is None
+    assert streamlit_stub.session_state.fortune_pdf_bytes is None
+    assert streamlit_stub.session_state.fortune_pdf_purchase_id is None
+    assert not streamlit_stub.session_state.get("success_calls")
+    assert any("PDF保存設定に不備" in message for message in streamlit_stub.errors)
+    assert any(
+        call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing"
+        for call in logger.calls
+    )
+
+
 def test_review_valid_image_can_enter_submit_path(monkeypatch):
     calls = []
     streamlit_stub = StreamlitStub([uploaded("palm.heic")], uploaded_pdf=uploaded_pdf(), click_submit=True)
@@ -392,6 +444,64 @@ def test_review_valid_image_can_enter_submit_path(monkeypatch):
     assert streamlit_stub.buttons[-1]["disabled"] is False
     assert "reading_started" in calls
     assert "review_generate" in calls
+
+
+def test_review_production_missing_bucket_stops_before_pdf_validation_gemini_and_reading_started(monkeypatch):
+    calls = []
+    streamlit_stub = StreamlitStub([uploaded("palm.heic")], uploaded_pdf=uploaded_pdf(), click_submit=True)
+    logger = RecordingLogger()
+    purchase = {
+        "purchase_id": "p_review",
+        "payment_status": "paid",
+        "used_flag": False,
+        "generation_processing": False,
+        "product_type": app.PRODUCT_TYPE_REVIEW,
+    }
+    patch_common(monkeypatch, streamlit_stub, calls)
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(app, "get_purchase_product_type", lambda record: app.PRODUCT_TYPE_REVIEW)
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: purchase)
+    monkeypatch.setattr(app, "normalize_uploaded_images", lambda files: [normalized_image()])
+    monkeypatch.setattr(
+        app,
+        "validate_review_pdf_content",
+        lambda pdf_bytes: calls.append("validate_pdf") or {"is_valid_previous_pdf": True},
+    )
+    monkeypatch.setattr(
+        fortune_service,
+        "call_gemini_review_pdf_analysis",
+        lambda pdf_bytes: calls.append("gemini_pdf_analysis"),
+    )
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda *args, **kwargs: calls.append("claim"),
+    )
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume"))
+
+    app.render_review_fortune_form(purchase, logger)
+
+    assert "validate_pdf" not in calls
+    assert "gemini_pdf_analysis" not in calls
+    assert "reading_started" not in calls
+    assert "review_generate" not in calls
+    assert "claim" not in calls
+    assert "consume" not in calls
+    assert purchase["used_flag"] is False
+    assert purchase["generation_processing"] is False
+    assert streamlit_stub.session_state.review_context is None
+    assert streamlit_stub.session_state.review_fortune is None
+    assert streamlit_stub.session_state.review_fortune_purchase_id is None
+    assert streamlit_stub.session_state.review_pdf_bytes is None
+    assert streamlit_stub.session_state.review_pdf_generated_purchase_id is None
+    assert "p_review" not in streamlit_stub.session_state.review_purchase_consumed
+    assert not streamlit_stub.session_state.get("success_calls")
+    assert any("PDF保存設定に不備" in message for message in streamlit_stub.errors)
+    assert any(
+        call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing"
+        for call in logger.calls
+    )
 
 
 def test_regular_too_many_files_does_not_normalize(monkeypatch):

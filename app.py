@@ -1310,6 +1310,45 @@ def mask_purchase_id(purchase_id: str | None) -> str:
     return f"{value[:6]}...{value[-4:]}"
 
 
+def is_production_app_env() -> bool:
+    return str(APP_ENV or "").strip().lower() in {"production", "prod"}
+
+
+def ensure_pdf_recovery_configured_for_generation(
+    purchase_id: str,
+    logger: logging.Logger,
+) -> bool:
+    if not is_production_app_env() or is_pdf_recovery_enabled():
+        return True
+
+    logger.error(
+        "pdf_recovery_configuration_missing",
+        extra={
+            "env": APP_ENV,
+            "purchase_ref": mask_purchase_id(purchase_id),
+        },
+    )
+    return False
+
+
+def render_pdf_recovery_configuration_error() -> None:
+    st.error("PDF保存設定に不備があるため、生成を開始できませんでした。")
+    st.error("購入権は使用済みにしていません。時間をおいて再度お試しください。")
+    st.error("解消しない場合は、お問い合わせください。")
+
+
+def guard_pdf_recovery_configuration_before_generation(
+    purchase_id: str,
+    logger: logging.Logger,
+) -> bool:
+    if ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+        return True
+
+    st.session_state.generation_claim_status = "configuration_error"
+    render_pdf_recovery_configuration_error()
+    return False
+
+
 def prepare_pdf_recovery_metadata(
     purchase_id: str,
     pdf_data: bytes,
@@ -1474,6 +1513,10 @@ def generate_regular_fortune_pdf_and_consume(
     purchase_id: str,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bytes] | None:
+    if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+        st.session_state.generation_claim_status = "configuration_error"
+        return None
+
     claim_status = claim_purchase_generation(purchase_id, logger)
     if claim_status != GENERATION_CLAIMED:
         return None
@@ -1508,6 +1551,9 @@ def generate_review_fortune_pdf_and_consume(
     purchase_id: str,
     logger: logging.Logger,
 ) -> dict[str, Any]:
+    if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+        return {"status": "configuration_error"}
+
     claim_status = claim_purchase_generation(purchase_id, logger)
     if claim_status != GENERATION_CLAIMED:
         return {"status": "claim_failed", "claim_status": claim_status}
@@ -2386,6 +2432,9 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         if not is_purchase_ready(record):
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
             st.stop()
+        purchase_id = str(active_purchase.get("purchase_id") or "")
+        if not guard_pdf_recovery_configuration_before_generation(purchase_id, logger):
+            return
 
         errors = validate_review_inputs(
             user_name=user_name,
@@ -2458,7 +2507,6 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     "status": "attached" if palm_image_count > 0 else "not_attached",
                 },
             }
-            purchase_id = str(active_purchase.get("purchase_id") or "")
             try:
                 with st.spinner("前回のお告げを要約し、見返し便の鑑定とPDFを生成しています..."):
                     track_purchase_ga4_event_once(
@@ -2495,6 +2543,10 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     st.error("購入権の確認に失敗しました。")
                     st.error("ページを更新せず、時間をおいて再度お試しください。")
                     st.error("解消しない場合は、お問い合わせください。")
+                return
+
+            if completed.get("status") == "configuration_error":
+                render_pdf_recovery_configuration_error()
                 return
 
             if completed.get("status") == "summary_failed":
@@ -2842,6 +2894,9 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
         if not is_purchase_ready(record):
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
             st.stop()
+        purchase_id = str(active_purchase.get("purchase_id") or "")
+        if not guard_pdf_recovery_configuration_before_generation(purchase_id, logger):
+            return
 
         validation_uploaded_files = uploaded_files or [
             SimpleNamespace(name=file.original_name, size=file.original_size_bytes)
@@ -2893,7 +2948,6 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 )
 
                 with st.spinner("龍神さまが降臨されています..."):
-                    purchase_id = str(active_purchase.get("purchase_id") or "")
                     track_purchase_ga4_event_once(
                         "reading_started",
                         purchase_id,
@@ -2909,6 +2963,8 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 if completed is None:
                     if st.session_state.get("generation_claim_status") == GENERATION_CLAIM_PROCESSING:
                         st.info("現在処理中です。完了までお待ちください。")
+                    elif st.session_state.get("generation_claim_status") == "configuration_error":
+                        render_pdf_recovery_configuration_error()
                     else:
                         st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
                         st.error("解消しない場合は、お問い合わせください。")
