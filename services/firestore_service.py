@@ -20,6 +20,7 @@ GA4_EVENT_FIELD_MAP: Dict[str, tuple[str, str]] = {
 GENERATION_CLAIMED = "claimed"
 GENERATION_CLAIM_PROCESSING = "processing"
 GENERATION_CLAIM_NOT_READY = "not_ready"
+PDF_STATUS_READY = "ready"
 
 
 def _now_utc() -> datetime:
@@ -237,6 +238,45 @@ def _purchase_can_be_used(purchase: Dict[str, Any], access_token: str) -> bool:
     )
 
 
+def _datetime_is_future(value: Any, now: datetime | None = None) -> bool:
+    if not value:
+        return False
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return False
+    if getattr(value, "tzinfo", None) is None:
+        try:
+            value = value.replace(tzinfo=timezone.utc)
+        except Exception:
+            return False
+
+    try:
+        return value > (now or _now_utc())
+    except TypeError:
+        return False
+
+
+def can_recover_purchase_pdf(
+    purchase: Dict[str, Any] | None,
+    access_token: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    return bool(
+        purchase
+        and purchase.get("payment_status") == "paid"
+        and purchase.get("used_flag") is True
+        and purchase.get("generation_processing") is not True
+        and purchase.get("pdf_status") == PDF_STATUS_READY
+        and isinstance(purchase.get("pdf_object_path"), str)
+        and bool(purchase.get("pdf_object_path"))
+        and _access_token_matches(purchase, access_token)
+        and _datetime_is_future(purchase.get("pdf_expires_at"), now)
+    )
+
+
 def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
     """
     transaction 内で生成開始前のpurchaseを処理中としてclaimする。
@@ -313,7 +353,11 @@ def release_generation_claim_transaction(purchase_id: str, access_token: str) ->
     return release(transaction)
 
 
-def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
+def consume_purchase_transaction(
+    purchase_id: str,
+    access_token: str,
+    pdf_metadata: Dict[str, Any] | None = None,
+) -> bool:
     """
     transaction 内で購入情報を再確認し、利用可能な場合だけ使用済みにする。
     """
@@ -341,16 +385,25 @@ def consume_purchase_transaction(purchase_id: str, access_token: str) -> bool:
             return False
 
         now = _now_utc()
-        transaction.update(
-            doc_ref,
-            {
-                "used_flag": True,
-                "used_at": now,
-                "generation_processing": False,
-                "generation_processing_ended_at": now,
-                "updated_at": now,
-            },
-        )
+        updates: Dict[str, Any] = {
+            "used_flag": True,
+            "used_at": now,
+            "generation_processing": False,
+            "generation_processing_ended_at": now,
+            "updated_at": now,
+        }
+        if pdf_metadata:
+            updates.update(
+                {
+                    "pdf_status": pdf_metadata.get("pdf_status"),
+                    "pdf_object_path": pdf_metadata.get("pdf_object_path"),
+                    "pdf_generated_at": pdf_metadata.get("pdf_generated_at"),
+                    "pdf_expires_at": pdf_metadata.get("pdf_expires_at"),
+                    "pdf_sha256": pdf_metadata.get("pdf_sha256"),
+                    "pdf_artifact_version": pdf_metadata.get("pdf_artifact_version"),
+                }
+            )
+        transaction.update(doc_ref, updates)
         return True
 
     return consume(transaction)

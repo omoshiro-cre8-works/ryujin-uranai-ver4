@@ -47,6 +47,7 @@ from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
     GENERATION_CLAIMED,
     GENERATION_CLAIM_PROCESSING,
+    can_recover_purchase_pdf,
     claim_generation_transaction,
     consume_purchase_transaction,
     create_purchase_record as firestore_create_purchase_record,
@@ -72,6 +73,14 @@ from services.pdf_service import (
     format_review_comparison_blocks,
     generate_miko_letter_pdf,
     generate_review_fortune_pdf,
+)
+from services.pdf_storage_service import (
+    PdfStorageConfigError,
+    PdfStorageError,
+    is_pdf_recovery_enabled,
+    read_pdf_for_recovery,
+    sha256_pdf,
+    upload_pdf_for_recovery,
 )
 from services.validation_service import (
     format_birth_time_text,
@@ -1287,16 +1296,71 @@ def sync_purchase_from_session(session_id: str, logger: logging.Logger) -> dict[
     return with_restored_tracking_params(record, metadata)
 
 
-def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
+def mask_purchase_id(purchase_id: str | None) -> str:
+    value = str(purchase_id or "")
+    if len(value) <= 10:
+        return value
+    return f"{value[:6]}...{value[-4:]}"
+
+
+def prepare_pdf_recovery_metadata(
+    purchase_id: str,
+    pdf_data: bytes,
+    logger: logging.Logger,
+) -> dict[str, Any] | None:
+    if not is_pdf_recovery_enabled():
+        return None
+
+    record = get_purchase_record(purchase_id)
+    checkout_completed_at = (record or {}).get("checkout_completed_at")
+    logger.info(
+        "pdf_upload_started",
+        extra={"purchase_ref": mask_purchase_id(purchase_id)},
+    )
+    try:
+        stored_pdf = upload_pdf_for_recovery(
+            purchase_id=purchase_id,
+            pdf_bytes=pdf_data,
+            checkout_completed_at=checkout_completed_at,
+        )
+    except PdfStorageConfigError:
+        logger.exception(
+            "pdf_upload_failed",
+            extra={"purchase_ref": mask_purchase_id(purchase_id), "reason": "config"},
+        )
+        raise
+    except Exception as exc:
+        logger.exception(
+            "pdf_upload_failed",
+            extra={"purchase_ref": mask_purchase_id(purchase_id)},
+        )
+        raise PdfStorageError("PDF recovery upload failed") from exc
+
+    logger.info(
+        "pdf_upload_succeeded",
+        extra={
+            "purchase_ref": mask_purchase_id(purchase_id),
+            "artifact_version": stored_pdf.artifact_version,
+        },
+    )
+    return stored_pdf.firestore_metadata()
+
+
+def consume_purchase(
+    purchase_id: str,
+    logger: logging.Logger,
+    pdf_metadata: dict[str, Any] | None = None,
+) -> bool:
     try:
         consumed = consume_purchase_transaction(
             purchase_id,
             str(st.session_state.get("active_access_token") or ""),
+            pdf_metadata=pdf_metadata,
         )
     except Exception:
         logger.exception(
             "purchase_consume_failed",
-            extra={"purchase_id": purchase_id},
+            extra={"purchase_ref": mask_purchase_id(purchase_id)},
         )
         return False
     if not consumed:
@@ -1305,7 +1369,7 @@ def consume_purchase(purchase_id: str, logger: logging.Logger) -> bool:
         "purchase_consumed",
         extra={
             "env": APP_ENV,
-            "purchase_id": purchase_id,
+            "purchase_ref": mask_purchase_id(purchase_id),
         },
     )
     return True
@@ -1376,11 +1440,17 @@ def generate_regular_fortune_pdf_and_consume(
     try:
         result = call_gemini_fortune(payload)
         pdf_data = generate_miko_letter_pdf(payload.user_name, result)
+        pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
     except Exception:
         release_purchase_generation_claim(purchase_id, logger)
         raise
 
-    if not consume_purchase(purchase_id, logger):
+    consumed = (
+        consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
+        if pdf_metadata
+        else consume_purchase(purchase_id, logger)
+    )
+    if not consumed:
         release_purchase_generation_claim(purchase_id, logger)
         return None
     return result, pdf_data
@@ -1430,11 +1500,17 @@ def generate_review_fortune_pdf_and_consume(
             review_fortune=review_fortune,
             review_context=review_context,
         )
+        pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
     except Exception:
         release_purchase_generation_claim(purchase_id, logger)
         raise
 
-    if not consume_purchase(purchase_id, logger):
+    consumed = (
+        consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
+        if pdf_metadata
+        else consume_purchase(purchase_id, logger)
+    )
+    if not consumed:
         release_purchase_generation_claim(purchase_id, logger)
         return {"status": "consume_failed"}
 
@@ -1922,6 +1998,109 @@ def render_completion_screen(product_type: str | None = None) -> None:
         primary=False,
         margin_top_rem=0.75 if has_primary_button else 1.35,
     )
+
+
+def has_pdf_recovery_metadata(record: dict[str, Any] | None) -> bool:
+    return bool(
+        record
+        and record.get("pdf_status")
+        and record.get("pdf_object_path")
+        and record.get("pdf_expires_at")
+    )
+
+
+def is_pdf_recovery_expired(record: dict[str, Any] | None) -> bool:
+    if not record:
+        return False
+    expires_at = record.get("pdf_expires_at")
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.datetime.fromisoformat(expires_at)
+        except ValueError:
+            return False
+    if not expires_at:
+        return False
+    if getattr(expires_at, "tzinfo", None) is None:
+        expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+    try:
+        return expires_at <= utc_now()
+    except TypeError:
+        return False
+
+
+def render_pdf_recovery_screen(
+    active_purchase: dict[str, Any],
+    logger: logging.Logger,
+) -> bool:
+    if not has_pdf_recovery_metadata(active_purchase):
+        return False
+
+    product_type = get_purchase_product_type(active_purchase)
+    access_token = str(
+        st.session_state.get("active_access_token")
+        or get_query_param_value("access_token")
+        or ""
+    )
+    scroll_completion_screen_to_top()
+    render_form_gap(2)
+    render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
+
+    if not can_recover_purchase_pdf(active_purchase, access_token):
+        if is_pdf_recovery_expired(active_purchase):
+            logger.info(
+                "pdf_recovery_expired",
+                extra={"purchase_ref": mask_purchase_id(active_purchase.get("purchase_id"))},
+            )
+        st.warning("生成済みPDFの再ダウンロード期限が過ぎているか、アクセス情報を確認できませんでした。")
+        render_completion_screen(product_type)
+        return True
+
+    if not is_pdf_recovery_enabled():
+        logger.error(
+            "pdf_recovery_config_missing",
+            extra={"purchase_ref": mask_purchase_id(active_purchase.get("purchase_id"))},
+        )
+        st.error("生成済みPDFを読み込む設定が未完了です。時間をおいてお問い合わせください。")
+        render_completion_screen(product_type)
+        return True
+
+    object_path = str(active_purchase.get("pdf_object_path") or "")
+    expected_sha256 = str(active_purchase.get("pdf_sha256") or "")
+    try:
+        pdf_data = read_pdf_for_recovery(object_path)
+    except Exception:
+        logger.exception(
+            "pdf_recovery_read_failed",
+            extra={"purchase_ref": mask_purchase_id(active_purchase.get("purchase_id"))},
+        )
+        st.error("生成済みPDFを読み込めませんでした。再生成は行わず、お問い合わせをご案内しています。")
+        render_completion_screen(product_type)
+        return True
+
+    actual_sha256 = sha256_pdf(pdf_data)
+    if expected_sha256 and actual_sha256 != expected_sha256:
+        logger.error(
+            "pdf_recovery_hash_mismatch",
+            extra={"purchase_ref": mask_purchase_id(active_purchase.get("purchase_id"))},
+        )
+        st.error("生成済みPDFの確認に失敗しました。安全のためダウンロードを停止しました。")
+        render_completion_screen(product_type)
+        return True
+
+    logger.info(
+        "pdf_recovery_download",
+        extra={"purchase_ref": mask_purchase_id(active_purchase.get("purchase_id"))},
+    )
+    st.success("生成済みPDFを再ダウンロードできます。")
+    st.download_button(
+        label="生成済みPDFを再ダウンロード",
+        data=pdf_data,
+        file_name="ryujin_uranai.pdf",
+        mime="application/pdf",
+        key=f"pdf_recovery_download_{active_purchase.get('purchase_id')}",
+    )
+    render_completion_screen(product_type)
+    return True
 
 
 def render_header(title_top_gap_rem: float = 0.1, header_top_gap_rem: float = 0.0) -> None:
@@ -2802,6 +2981,8 @@ def main() -> None:
         return
 
     if active_purchase and active_purchase.get("used_flag"):
+        if render_pdf_recovery_screen(active_purchase, logger):
+            st.stop()
         render_completion_screen(get_purchase_product_type(active_purchase))
         st.stop()
 
