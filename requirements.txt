@@ -7,3 +7,4 @@ pillow-heif==1.5.0
 stripe>=14.4.0,<15
 google-cloud-firestore==2.27.0
 google-api-core==2.34.0
+google-cloud-storage==3.6.0

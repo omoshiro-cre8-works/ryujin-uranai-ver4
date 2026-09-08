@@ -322,6 +322,40 @@ def test_consume_purchase_transaction_updates_valid_hash_record(monkeypatch):
     assert updates["used_at"] == updates["updated_at"]
 
 
+def test_consume_purchase_transaction_writes_pdf_metadata_with_used_flag(monkeypatch):
+    token, record = _consume_record(generation_processing=True)
+    generated_at = datetime.now(timezone.utc)
+    expires_at = generated_at + timedelta(days=7)
+    pdf_metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_transaction/artifact.pdf",
+        "pdf_generated_at": generated_at,
+        "pdf_expires_at": expires_at,
+        "pdf_sha256": "abc123",
+        "pdf_artifact_version": "v1",
+    }
+
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
+    consumed = firestore_service.consume_purchase_transaction(
+        "p_transaction",
+        token,
+        pdf_metadata=pdf_metadata,
+    )
+
+    assert consumed is True
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["used_flag"] is True
+    assert updates["generation_processing"] is False
+    assert updates["pdf_status"] == "ready"
+    assert updates["pdf_object_path"] == "pdf-recovery/p_transaction/artifact.pdf"
+    assert updates["pdf_generated_at"] == generated_at
+    assert updates["pdf_expires_at"] == expires_at
+    assert updates["pdf_sha256"] == "abc123"
+    assert updates["pdf_artifact_version"] == "v1"
+
+
 @pytest.mark.parametrize(
     "record_updates",
     [
@@ -350,6 +384,88 @@ def test_consume_purchase_transaction_rejects_wrong_token(monkeypatch):
 
     assert consumed is False
     assert client.transaction_ref.updates == []
+
+
+def test_can_recover_purchase_pdf_allows_ready_used_record_with_matching_token():
+    token, record = _consume_record(
+        used_flag=True,
+        generation_processing=False,
+        pdf_status="ready",
+        pdf_object_path="pdf-recovery/p_transaction/artifact.pdf",
+        pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        pdf_sha256="a" * 64,
+    )
+
+    assert firestore_service.can_recover_purchase_pdf(record, token) is True
+
+
+@pytest.mark.parametrize(
+    "record_updates",
+    [
+        {"used_flag": False},
+        {"payment_status": "pending"},
+        {"generation_processing": True},
+        {"generation_processing": None},
+        {"pdf_status": "missing"},
+        {"pdf_object_path": ""},
+        {"pdf_sha256": None},
+        {"pdf_sha256": ""},
+        {"pdf_sha256": "not-a-sha256"},
+        {"pdf_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+    ],
+)
+def test_can_recover_purchase_pdf_rejects_invalid_records(record_updates):
+    token, record = _consume_record(
+        used_flag=True,
+        generation_processing=False,
+        pdf_status="ready",
+        pdf_object_path="pdf-recovery/p_transaction/artifact.pdf",
+        pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        pdf_sha256="a" * 64,
+    )
+    record.update(record_updates)
+
+    assert firestore_service.can_recover_purchase_pdf(record, token) is False
+
+
+def test_can_recover_purchase_pdf_rejects_wrong_token():
+    token, record = _consume_record(
+        used_flag=True,
+        generation_processing=False,
+        pdf_status="ready",
+        pdf_object_path="pdf-recovery/p_transaction/artifact.pdf",
+        pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        pdf_sha256="a" * 64,
+    )
+
+    assert firestore_service.can_recover_purchase_pdf(record, f"wrong-{token}") is False
+
+
+def test_can_recover_purchase_pdf_rejects_missing_generation_processing_field():
+    token, record = _consume_record(
+        used_flag=True,
+        pdf_status="ready",
+        pdf_object_path="pdf-recovery/p_transaction/artifact.pdf",
+        pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        pdf_sha256="a" * 64,
+    )
+    record.pop("generation_processing", None)
+
+    assert firestore_service.can_recover_purchase_pdf(record, token) is False
+
+
+def test_can_recover_purchase_pdf_ignores_generation_token_expiry_for_ready_pdf():
+    token, record = _consume_record(
+        used_flag=True,
+        generation_processing=False,
+        token_expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        pdf_status="ready",
+        pdf_object_path="pdf-recovery/p_transaction/artifact.pdf",
+        pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=6),
+        pdf_sha256="a" * 64,
+    )
+
+    assert firestore_service.can_recover_purchase_pdf(record, token) is True
 
 
 def test_consume_purchase_transaction_supports_legacy_token(monkeypatch):
