@@ -1495,14 +1495,15 @@ def generate_regular_fortune_pdf_and_consume(
     purchase_id: str,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bytes] | None:
+    if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+        st.session_state.generation_claim_status = "configuration_error"
+        return None
+
     claim_status = claim_purchase_generation(purchase_id, logger)
     if claim_status != GENERATION_CLAIMED:
         return None
 
     try:
-        if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
-            release_generation_claim_after_failure(purchase_id, logger)
-            return None
         result = call_gemini_fortune(payload)
         pdf_data = generate_miko_letter_pdf(payload.user_name, result)
         pdf_metadata = prepare_pdf_recovery_metadata(purchase_id, pdf_data, logger)
@@ -1532,14 +1533,14 @@ def generate_review_fortune_pdf_and_consume(
     purchase_id: str,
     logger: logging.Logger,
 ) -> dict[str, Any]:
+    if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
+        return {"status": "configuration_error"}
+
     claim_status = claim_purchase_generation(purchase_id, logger)
     if claim_status != GENERATION_CLAIMED:
         return {"status": "claim_failed", "claim_status": claim_status}
 
     try:
-        if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
-            release_generation_claim_after_failure(purchase_id, logger)
-            return {"status": "configuration_error"}
         pdf_summary = call_gemini_review_pdf_summary(uploaded_pdf_bytes, pdf_analysis)
         if not pdf_summary.get("summary_success"):
             release_generation_claim_after_failure(purchase_id, logger)
@@ -2524,6 +2525,12 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                     st.error("解消しない場合は、お問い合わせください。")
                 return
 
+            if completed.get("status") == "configuration_error":
+                st.error("PDF保存設定に不備があるため、生成を開始できませんでした。")
+                st.error("購入権は使用済みにしていません。時間をおいて再度お試しください。")
+                st.error("解消しない場合は、お問い合わせください。")
+                return
+
             if completed.get("status") == "summary_failed":
                 st.error("前回PDFの要約中にエラーが発生しました。")
                 st.error("時間をおいてもう一度お試しください。")
@@ -2936,6 +2943,10 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 if completed is None:
                     if st.session_state.get("generation_claim_status") == GENERATION_CLAIM_PROCESSING:
                         st.info("現在処理中です。完了までお待ちください。")
+                    elif st.session_state.get("generation_claim_status") == "configuration_error":
+                        st.error("PDF保存設定に不備があるため、生成を開始できませんでした。")
+                        st.error("購入権は使用済みにしていません。時間をおいて再度お試しください。")
+                        st.error("解消しない場合は、お問い合わせください。")
                     else:
                         st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
                         st.error("解消しない場合は、お問い合わせください。")

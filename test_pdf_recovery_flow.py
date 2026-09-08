@@ -38,6 +38,17 @@ class RecordingLogger:
         self.calls.append(("exception", args, kwargs))
 
 
+class ContextStub:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value if self.value is not None else self
+
+    def __exit__(self, *args):
+        return None
+
+
 def make_streamlit_stub(access_token="token"):
     calls = []
     return SimpleNamespace(
@@ -50,6 +61,64 @@ def make_streamlit_stub(access_token="token"):
         download_button=lambda **kwargs: calls.append(("download", kwargs)),
         markdown=lambda *args, **kwargs: calls.append(("markdown", args, kwargs)),
         columns=lambda spec: [SimpleNamespace(__enter__=lambda self: self, __exit__=lambda *args: None) for _ in range(len(spec))],
+        stop=lambda: (_ for _ in ()).throw(StopCalled()),
+    )
+
+
+def make_review_form_streamlit_stub():
+    calls = []
+    session_state = AttrDict(
+        active_access_token="token",
+        ga4_form_displayed_purchase_ids=set(),
+        review_context="existing-context",
+        review_fortune={"existing": "fortune"},
+        review_fortune_purchase_id="existing-purchase",
+        review_pdf_bytes=b"existing-pdf",
+        review_pdf_generated_purchase_id="existing-purchase",
+        review_purchase_consumed=set(),
+    )
+
+    placeholder = ContextStub()
+    placeholder.empty = lambda: calls.append(("placeholder_empty", None))
+    placeholder.button = lambda *args, **kwargs: True
+
+    previous_pdf = SimpleNamespace(getvalue=lambda: b"previous-pdf")
+
+    def file_uploader(*args, **kwargs):
+        if kwargs.get("key") == "review_previous_pdf":
+            return previous_pdf
+        return []
+
+    def selectbox(label, options, index=0, **kwargs):
+        key = kwargs.get("key")
+        if key == "review_birth_year":
+            return 2000
+        if key == "review_birth_month":
+            return 1
+        if key == "review_birth_day":
+            return 1
+        return options[index]
+
+    return SimpleNamespace(
+        calls=calls,
+        session_state=session_state,
+        query_params={},
+        caption=lambda value, **kwargs: calls.append(("caption", value)),
+        markdown=lambda *args, **kwargs: calls.append(("markdown", args, kwargs)),
+        file_uploader=file_uploader,
+        text_input=lambda *args, **kwargs: "テスト",
+        text_area=lambda *args, **kwargs: "近況メモ",
+        selectbox=selectbox,
+        radio=lambda *args, **kwargs: "不明",
+        columns=lambda spec: [ContextStub() for _ in range(spec if isinstance(spec, int) else len(spec))],
+        empty=lambda: placeholder,
+        button=lambda *args, **kwargs: True,
+        spinner=lambda *args, **kwargs: ContextStub(),
+        error=lambda value, **kwargs: calls.append(("error", value)),
+        info=lambda value, **kwargs: calls.append(("info", value)),
+        success=lambda value, **kwargs: calls.append(("success", value)),
+        warning=lambda value, **kwargs: calls.append(("warning", value)),
+        download_button=lambda **kwargs: calls.append(("download", kwargs)),
         stop=lambda: (_ for _ in ()).throw(StopCalled()),
     )
 
@@ -116,67 +185,81 @@ def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monke
     assert calls == ["claim", "gemini", "pdf", "upload", ("consume", {"pdf_status": "ready"})]
 
 
-def test_regular_generation_production_missing_bucket_releases_without_pdf_or_consume(monkeypatch):
+@pytest.mark.parametrize(
+    ("app_env", "bucket_value"),
+    [
+        ("production", None),
+        ("prod", None),
+        ("PRODUCTION", None),
+        (" prod ", None),
+        ("production", ""),
+        ("production", "   "),
+    ],
+)
+def test_regular_generation_production_missing_bucket_fails_before_claim(monkeypatch, app_env, bucket_value):
     calls = []
-    purchase_state = {"used_flag": False, "generation_processing": True}
     payload = SimpleNamespace(user_name="テストユーザー")
     logger = RecordingLogger()
 
-    monkeypatch.setattr(app, "APP_ENV", "production")
-    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(app, "APP_ENV", app_env)
+    if bucket_value is None:
+        monkeypatch.delenv("PDF_RECOVERY_BUCKET", raising=False)
+    else:
+        monkeypatch.setenv("PDF_RECOVERY_BUCKET", bucket_value)
     monkeypatch.setattr(
         app,
         "claim_purchase_generation",
-        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
-    )
-
-    def release(purchase_id, logger):
-        calls.append("release")
-        purchase_state["generation_processing"] = False
-        return True
-
-    monkeypatch.setattr(app, "release_purchase_generation_claim", release)
-    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
-    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
-    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
-
-    completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", logger)
-
-    assert completed is None
-    assert calls == ["claim", "release"]
-    assert purchase_state == {"used_flag": False, "generation_processing": False}
-    assert any(call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing" for call in logger.calls)
-
-
-def test_regular_generation_production_missing_bucket_release_failure_raises(monkeypatch):
-    calls = []
-    payload = SimpleNamespace(user_name="テストユーザー")
-
-    monkeypatch.setattr(app, "APP_ENV", "production")
-    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
-    monkeypatch.setattr(
-        app,
-        "claim_purchase_generation",
-        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+        lambda purchase_id, logger: calls.append("claim") or pytest.fail("claim should not run"),
     )
     monkeypatch.setattr(
         app,
         "release_purchase_generation_claim",
-        lambda purchase_id, logger: calls.append("release") or False,
+        lambda purchase_id, logger: calls.append("release") or pytest.fail("release should not run"),
     )
+    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
+    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
     monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+    streamlit_stub = make_streamlit_stub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
 
-    with pytest.raises(app.GenerationReleaseError):
-        app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
+    completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", logger)
 
-    assert calls == ["claim", "release"]
+    assert completed is None
+    assert calls == []
+    assert streamlit_stub.session_state.generation_claim_status == "configuration_error"
+    assert any(call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing" for call in logger.calls)
 
 
-def test_regular_generation_staging_missing_bucket_preserves_fallback_consume(monkeypatch):
+def test_regular_generation_production_missing_bucket_does_not_release(monkeypatch):
     calls = []
     payload = SimpleNamespace(user_name="テストユーザー")
-    monkeypatch.setattr(app, "APP_ENV", "staging")
-    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+
+    monkeypatch.setattr(app, "APP_ENV", "production")
+    monkeypatch.delenv("PDF_RECOVERY_BUCKET", raising=False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or pytest.fail("claim should not run"),
+    )
+    monkeypatch.setattr(
+        app,
+        "release_purchase_generation_claim",
+        lambda purchase_id, logger: calls.append("release") or pytest.fail("release should not run"),
+    )
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+    monkeypatch.setattr(app, "st", make_streamlit_stub())
+
+    assert app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger()) is None
+
+    assert calls == []
+
+
+@pytest.mark.parametrize("app_env", ["staging", "development", "local"])
+def test_regular_generation_non_production_missing_bucket_preserves_fallback_consume(monkeypatch, app_env):
+    calls = []
+    payload = SimpleNamespace(user_name="テストユーザー")
+    monkeypatch.setattr(app, "APP_ENV", app_env)
+    monkeypatch.delenv("PDF_RECOVERY_BUCKET", raising=False)
     monkeypatch.setattr(
         app,
         "claim_purchase_generation",
@@ -443,25 +526,36 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
     ]
 
 
-def test_review_generation_production_missing_bucket_releases_without_pdf_or_consume(monkeypatch):
+@pytest.mark.parametrize(
+    ("app_env", "bucket_value"),
+    [
+        ("production", None),
+        ("prod", None),
+        ("PRODUCTION", None),
+        (" prod ", None),
+        ("production", ""),
+        ("production", "   "),
+    ],
+)
+def test_review_generation_production_missing_bucket_fails_before_claim(monkeypatch, app_env, bucket_value):
     calls = []
-    purchase_state = {"used_flag": False, "generation_processing": True}
     logger = RecordingLogger()
 
-    monkeypatch.setattr(app, "APP_ENV", "production")
-    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+    monkeypatch.setattr(app, "APP_ENV", app_env)
+    if bucket_value is None:
+        monkeypatch.delenv("PDF_RECOVERY_BUCKET", raising=False)
+    else:
+        monkeypatch.setenv("PDF_RECOVERY_BUCKET", bucket_value)
     monkeypatch.setattr(
         app,
         "claim_purchase_generation",
-        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+        lambda purchase_id, logger: calls.append("claim") or pytest.fail("claim should not run"),
     )
-
-    def release(purchase_id, logger):
-        calls.append("release")
-        purchase_state["generation_processing"] = False
-        return True
-
-    monkeypatch.setattr(app, "release_purchase_generation_claim", release)
+    monkeypatch.setattr(
+        app,
+        "release_purchase_generation_claim",
+        lambda purchase_id, logger: calls.append("release") or pytest.fail("release should not run"),
+    )
     monkeypatch.setattr(
         app,
         "call_gemini_review_pdf_summary",
@@ -481,6 +575,96 @@ def test_review_generation_production_missing_bucket_releases_without_pdf_or_con
     )
 
     assert completed == {"status": "configuration_error"}
-    assert calls == ["claim", "release"]
-    assert purchase_state == {"used_flag": False, "generation_processing": False}
+    assert calls == []
     assert any(call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing" for call in logger.calls)
+
+
+@pytest.mark.parametrize("app_env", ["staging", "development", "local"])
+def test_review_generation_non_production_missing_bucket_preserves_fallback_consume(monkeypatch, app_env):
+    calls = []
+    review_context = {"review_context": {"current_inputs": {}}}
+    review_fortune = {"intro": "result"}
+
+    monkeypatch.setattr(app, "APP_ENV", app_env)
+    monkeypatch.delenv("PDF_RECOVERY_BUCKET", raising=False)
+    monkeypatch.setattr(
+        app,
+        "claim_purchase_generation",
+        lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED,
+    )
+    monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release") or True)
+    monkeypatch.setattr(
+        app,
+        "call_gemini_review_pdf_summary",
+        lambda pdf_bytes, analysis: calls.append("summary") or {"summary_success": True, "previous_summary": {"summary": "previous"}},
+    )
+    monkeypatch.setattr(app, "build_review_context", lambda **kwargs: calls.append("context") or review_context)
+    monkeypatch.setattr(app, "call_gemini_review_fortune", lambda **kwargs: calls.append("fortune") or {"fortune_success": True, "review_fortune": review_fortune})
+    monkeypatch.setattr(app, "generate_review_fortune_pdf", lambda **kwargs: calls.append("pdf") or b"review-pdf")
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("fallback") or None)
+    monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True)
+
+    completed = app.generate_review_fortune_pdf_and_consume(
+        uploaded_pdf_bytes=b"previous-pdf",
+        pdf_analysis={"is_valid_previous_pdf": True},
+        current_inputs={},
+        current_private_inputs={},
+        image_parts=[],
+        purchase_id="p_review",
+        logger=RecordingLogger(),
+    )
+
+    assert completed["status"] == "success"
+    assert calls == [
+        "claim",
+        "summary",
+        "context",
+        "fortune",
+        "pdf",
+        "fallback",
+        ("consume", None),
+    ]
+
+
+def test_review_form_configuration_error_does_not_write_success_session_state(monkeypatch):
+    streamlit_stub = make_review_form_streamlit_stub()
+    logger = RecordingLogger()
+    purchase = {
+        "purchase_id": "p_review",
+        "payment_status": "paid",
+        "used_flag": False,
+        "token_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
+        "product_type": app.PRODUCT_TYPE_REVIEW,
+    }
+
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "render_form_gap", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "track_ga4_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "track_purchase_ga4_event_once", lambda *args, **kwargs: True)
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: purchase)
+    monkeypatch.setattr(app, "validate_review_inputs", lambda **kwargs: [])
+    monkeypatch.setattr(
+        app,
+        "validate_review_pdf_content",
+        lambda pdf_bytes: {"is_valid_previous_pdf": True, "previous_reading_date": "2026-01-01"},
+    )
+    monkeypatch.setattr(app, "build_image_parts", lambda normalized_images: [])
+    monkeypatch.setattr(
+        app,
+        "generate_review_fortune_pdf_and_consume",
+        lambda **kwargs: {"status": "configuration_error"},
+    )
+
+    app.render_review_fortune_form(purchase, logger)
+
+    assert ("success", "前回PDFの確認と要約が完了しました。") not in streamlit_stub.calls
+    assert streamlit_stub.session_state.review_context is None
+    assert streamlit_stub.session_state.review_fortune is None
+    assert streamlit_stub.session_state.review_fortune_purchase_id is None
+    assert streamlit_stub.session_state.review_pdf_bytes is None
+    assert streamlit_stub.session_state.review_pdf_generated_purchase_id is None
+    assert "p_review" not in streamlit_stub.session_state.review_purchase_consumed
+    assert any(
+        call[0] == "error" and "PDF保存設定に不備" in call[1]
+        for call in streamlit_stub.calls
+    )
