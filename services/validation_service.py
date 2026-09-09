@@ -1,4 +1,5 @@
 from typing import Any
+import logging
 
 from config import (
     HAND_SIDE_OPTIONS,
@@ -9,6 +10,8 @@ from config import (
     get_app_passphrase,
     get_gemini_api_key,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_text(value: str) -> str:
@@ -51,8 +54,38 @@ def validate_review_pdf_basic(uploaded_pdf: Any | None) -> list[str]:
 
 def validate_review_pdf_content(uploaded_pdf_bytes: bytes) -> dict[str, Any]:
     from services.fortune_service import call_gemini_review_pdf_analysis
+    from services.review_pdf_validation_service import validate_review_pdf_deterministic
 
-    return call_gemini_review_pdf_analysis(uploaded_pdf_bytes)
+    deterministic_result = validate_review_pdf_deterministic(uploaded_pdf_bytes)
+    method = str(deterministic_result.get('validation_method') or '')
+    if deterministic_result.get('is_valid_previous_pdf') or method == 'deterministic_reject':
+        logger.info(
+            'review_pdf_validation_completed',
+            extra={
+                'review_pdf_validation_method': method,
+                'review_pdf_validation_result': 'accepted' if deterministic_result.get('is_valid_previous_pdf') else 'rejected',
+                'previous_reading_date_found': bool(deterministic_result.get('previous_reading_date')),
+            },
+        )
+        return deterministic_result
+
+    gemini_result = call_gemini_review_pdf_analysis(uploaded_pdf_bytes)
+    if deterministic_result.get('previous_reading_date') and not gemini_result.get('previous_reading_date'):
+        gemini_result['previous_reading_date'] = deterministic_result.get('previous_reading_date')
+        gemini_result['previous_reading_date_original'] = deterministic_result.get('previous_reading_date_original', '')
+        from services.fortune_service import add_review_pdf_date_deltas
+
+        gemini_result = add_review_pdf_date_deltas(gemini_result)
+    gemini_result['validation_method'] = 'gemini_fallback'
+    logger.info(
+        'review_pdf_validation_completed',
+        extra={
+            'review_pdf_validation_method': 'gemini_fallback',
+            'review_pdf_validation_result': 'accepted' if gemini_result.get('is_valid_previous_pdf') else 'rejected',
+            'previous_reading_date_found': bool(gemini_result.get('previous_reading_date')),
+        },
+    )
+    return gemini_result
 
 
 def validate_review_inputs(
