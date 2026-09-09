@@ -22,6 +22,14 @@ GENERATION_CLAIMED = "claimed"
 GENERATION_CLAIM_PROCESSING = "processing"
 GENERATION_CLAIM_NOT_READY = "not_ready"
 PDF_STATUS_READY = "ready"
+PDF_METADATA_FIELDS = (
+    "pdf_status",
+    "pdf_object_path",
+    "pdf_generated_at",
+    "pdf_expires_at",
+    "pdf_sha256",
+    "pdf_artifact_version",
+)
 
 
 def _now_utc() -> datetime:
@@ -263,6 +271,44 @@ def _valid_pdf_sha256(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
 
 
+def _has_ready_pdf_metadata(purchase: Dict[str, Any] | None, *, now: datetime | None = None) -> bool:
+    return bool(
+        purchase
+        and purchase.get("pdf_status") == PDF_STATUS_READY
+        and isinstance(purchase.get("pdf_object_path"), str)
+        and bool(purchase.get("pdf_object_path"))
+        and bool(purchase.get("pdf_generated_at"))
+        and _valid_pdf_sha256(purchase.get("pdf_sha256"))
+        and bool(purchase.get("pdf_artifact_version"))
+        and _datetime_is_future(purchase.get("pdf_expires_at"), now)
+    )
+
+
+def _pdf_metadata_is_valid(pdf_metadata: Dict[str, Any] | None) -> bool:
+    return bool(
+        pdf_metadata
+        and pdf_metadata.get("pdf_status") == PDF_STATUS_READY
+        and isinstance(pdf_metadata.get("pdf_object_path"), str)
+        and bool(pdf_metadata.get("pdf_object_path"))
+        and _valid_pdf_sha256(pdf_metadata.get("pdf_sha256"))
+        and bool(pdf_metadata.get("pdf_artifact_version"))
+        and pdf_metadata.get("pdf_generated_at")
+        and _datetime_is_future(pdf_metadata.get("pdf_expires_at"))
+    )
+
+
+def _pdf_metadata_matches_existing(
+    purchase: Dict[str, Any],
+    pdf_metadata: Dict[str, Any],
+) -> bool:
+    for field in PDF_METADATA_FIELDS:
+        existing = purchase.get(field)
+        incoming = pdf_metadata.get(field)
+        if existing and existing != incoming:
+            return False
+    return True
+
+
 def can_recover_purchase_pdf(
     purchase: Dict[str, Any] | None,
     access_token: str,
@@ -274,13 +320,75 @@ def can_recover_purchase_pdf(
         and purchase.get("payment_status") == "paid"
         and purchase.get("used_flag") is True
         and purchase.get("generation_processing") is False
-        and purchase.get("pdf_status") == PDF_STATUS_READY
-        and isinstance(purchase.get("pdf_object_path"), str)
-        and bool(purchase.get("pdf_object_path"))
-        and _valid_pdf_sha256(purchase.get("pdf_sha256"))
+        and _has_ready_pdf_metadata(purchase, now=now)
         and _access_token_matches(purchase, access_token)
-        and _datetime_is_future(purchase.get("pdf_expires_at"), now)
     )
+
+
+def can_finalize_interrupted_pdf_generation(
+    purchase: Dict[str, Any] | None,
+    access_token: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    return bool(
+        purchase
+        and purchase.get("payment_status") == "paid"
+        and purchase.get("used_flag") is False
+        and purchase.get("generation_processing") is True
+        and _has_ready_pdf_metadata(purchase, now=now)
+        and _access_token_matches(purchase, access_token)
+        and _purchase_token_is_active(purchase)
+    )
+
+
+def save_pdf_recovery_metadata_transaction(
+    purchase_id: str,
+    access_token: str,
+    pdf_metadata: Dict[str, Any],
+) -> bool:
+    """
+    GCS upload 済みPDFの recovery metadata を consume より先に保存する。
+
+    同一metadataの再保存は成功扱いにし、既存metadataと異なる場合は
+    別PDFへの差し替えを避けるため上書きしない。
+    """
+    if not purchase_id or not access_token or not _pdf_metadata_is_valid(pdf_metadata):
+        return False
+
+    db = get_firestore_client()
+    doc_ref = get_purchase_collection(db).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def save_metadata(transaction: Any) -> bool:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return False
+
+        purchase = snapshot.to_dict() or {}
+        if purchase.get("payment_status") != "paid":
+            return False
+        if purchase.get("used_flag") is not False:
+            return False
+        if purchase.get("generation_processing") is not True:
+            return False
+        if not _access_token_matches(purchase, access_token):
+            return False
+        if not _purchase_token_is_active(purchase):
+            return False
+        if not _pdf_metadata_matches_existing(purchase, pdf_metadata):
+            return False
+
+        if all(purchase.get(field) == pdf_metadata.get(field) for field in PDF_METADATA_FIELDS):
+            return True
+
+        updates = {field: pdf_metadata.get(field) for field in PDF_METADATA_FIELDS}
+        updates["updated_at"] = _now_utc()
+        transaction.update(doc_ref, updates)
+        return True
+
+    return save_metadata(transaction)
 
 
 def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
@@ -388,6 +496,11 @@ def consume_purchase_transaction(
         if not _access_token_matches(purchase, access_token):
             return False
         if not _purchase_token_is_active(purchase):
+            return False
+        if pdf_metadata and (
+            not _pdf_metadata_is_valid(pdf_metadata)
+            or not _pdf_metadata_matches_existing(purchase, pdf_metadata)
+        ):
             return False
 
         now = _now_utc()

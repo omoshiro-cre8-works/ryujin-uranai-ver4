@@ -48,6 +48,7 @@ from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
     GENERATION_CLAIMED,
     GENERATION_CLAIM_PROCESSING,
+    can_finalize_interrupted_pdf_generation,
     can_recover_purchase_pdf,
     claim_generation_transaction,
     consume_purchase_transaction,
@@ -58,6 +59,7 @@ from services.firestore_service import (
     is_ga4_event_sent,
     mark_ga4_event_sent_if_unset,
     release_generation_claim_transaction,
+    save_pdf_recovery_metadata_transaction,
 )
 from stripe_webhook.environment_config import EnvironmentConfigError, get_stripe_settings
 from services.fortune_service import (
@@ -1402,6 +1404,45 @@ def prepare_pdf_recovery_metadata(
     return stored_pdf.firestore_metadata()
 
 
+def persist_pdf_recovery_metadata_before_consume(
+    purchase_id: str,
+    pdf_metadata: dict[str, Any] | None,
+    logger: logging.Logger,
+) -> bool:
+    if not pdf_metadata:
+        return True
+
+    logger.info(
+        "pdf_metadata_save_started",
+        extra={"purchase_ref": mask_purchase_id(purchase_id)},
+    )
+    try:
+        saved = save_pdf_recovery_metadata_transaction(
+            purchase_id,
+            str(st.session_state.get("active_access_token") or ""),
+            pdf_metadata,
+        )
+    except Exception:
+        logger.exception(
+            "pdf_metadata_save_failed",
+            extra={"purchase_ref": mask_purchase_id(purchase_id)},
+        )
+        return False
+
+    if not saved:
+        logger.warning(
+            "pdf_metadata_save_rejected",
+            extra={"purchase_ref": mask_purchase_id(purchase_id)},
+        )
+        return False
+
+    logger.info(
+        "pdf_metadata_save_succeeded",
+        extra={"purchase_ref": mask_purchase_id(purchase_id)},
+    )
+    return True
+
+
 def consume_purchase(
     purchase_id: str,
     logger: logging.Logger,
@@ -1429,6 +1470,41 @@ def consume_purchase(
         },
     )
     return True
+
+
+def finalize_interrupted_pdf_generation_if_ready(
+    active_purchase: dict[str, Any] | None,
+    logger: logging.Logger,
+) -> dict[str, Any] | None:
+    if not active_purchase:
+        return None
+
+    purchase_id = str(active_purchase.get("purchase_id") or "")
+    access_token = str(
+        st.session_state.get("active_access_token")
+        or get_query_param_value("access_token")
+        or ""
+    )
+    if not can_finalize_interrupted_pdf_generation(active_purchase, access_token):
+        return None
+
+    logger.info(
+        "pdf_recovery_interrupted_finalize_started",
+        extra={"purchase_ref": mask_purchase_id(purchase_id)},
+    )
+    if not consume_purchase(purchase_id, logger):
+        logger.warning(
+            "pdf_recovery_interrupted_finalize_rejected",
+            extra={"purchase_ref": mask_purchase_id(purchase_id)},
+        )
+        return None
+
+    refreshed = get_purchase_record(purchase_id)
+    logger.info(
+        "pdf_recovery_interrupted_finalize_succeeded",
+        extra={"purchase_ref": mask_purchase_id(purchase_id)},
+    )
+    return refreshed
 
 
 def claim_purchase_generation(purchase_id: str, logger: logging.Logger) -> str:
@@ -1535,13 +1611,23 @@ def generate_regular_fortune_pdf_and_consume(
         release_generation_claim_after_failure(purchase_id, logger)
         raise
 
+    if not persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger):
+        release_generation_claim_after_failure(purchase_id, logger)
+        return None
+
     consumed = (
         consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
         if pdf_metadata
         else consume_purchase(purchase_id, logger)
     )
     if not consumed:
-        release_generation_claim_after_failure(purchase_id, logger)
+        if pdf_metadata:
+            logger.warning(
+                "purchase_consume_deferred_after_pdf_metadata_saved",
+                extra={"purchase_ref": mask_purchase_id(purchase_id)},
+            )
+        else:
+            release_generation_claim_after_failure(purchase_id, logger)
         return None
     return result, pdf_data, pdf_metadata
 
@@ -1600,13 +1686,23 @@ def generate_review_fortune_pdf_and_consume(
         release_generation_claim_after_failure(purchase_id, logger)
         raise
 
+    if not persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger):
+        release_generation_claim_after_failure(purchase_id, logger)
+        return {"status": "consume_failed"}
+
     consumed = (
         consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
         if pdf_metadata
         else consume_purchase(purchase_id, logger)
     )
     if not consumed:
-        release_generation_claim_after_failure(purchase_id, logger)
+        if pdf_metadata:
+            logger.warning(
+                "purchase_consume_deferred_after_pdf_metadata_saved",
+                extra={"purchase_ref": mask_purchase_id(purchase_id)},
+            )
+        else:
+            release_generation_claim_after_failure(purchase_id, logger)
         return {"status": "consume_failed"}
 
     return {
@@ -3116,6 +3212,10 @@ def main() -> None:
     if direct_checkout_requested:
         render_direct_checkout(requested_product_type, logger)
         return
+
+    finalized_purchase = finalize_interrupted_pdf_generation_if_ready(active_purchase, logger)
+    if finalized_purchase:
+        active_purchase = finalized_purchase
 
     if active_purchase and active_purchase.get("used_flag"):
         if render_pdf_recovery_screen(active_purchase, logger):
