@@ -339,6 +339,8 @@ def init_session_state() -> None:
         st.session_state.fortune_pdf_bytes = None
     if "fortune_pdf_purchase_id" not in st.session_state:
         st.session_state.fortune_pdf_purchase_id = None
+    if "fortune_pdf_recovery_metadata" not in st.session_state:
+        st.session_state.fortune_pdf_recovery_metadata = None
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
     if "active_purchase_id" not in st.session_state:
@@ -377,6 +379,8 @@ def init_session_state() -> None:
         st.session_state.review_pdf_bytes = None
     if "review_pdf_generated_purchase_id" not in st.session_state:
         st.session_state.review_pdf_generated_purchase_id = None
+    if "review_pdf_recovery_metadata" not in st.session_state:
+        st.session_state.review_pdf_recovery_metadata = None
     if "review_purchase_consumed" not in st.session_state:
         st.session_state.review_purchase_consumed = set()
     if "generation_claim_status" not in st.session_state:
@@ -1512,7 +1516,7 @@ def generate_regular_fortune_pdf_and_consume(
     payload: FortuneInput,
     purchase_id: str,
     logger: logging.Logger,
-) -> tuple[dict[str, Any], bytes] | None:
+) -> tuple[dict[str, Any], bytes, dict[str, Any] | None] | None:
     if not ensure_pdf_recovery_configured_for_generation(purchase_id, logger):
         st.session_state.generation_claim_status = "configuration_error"
         return None
@@ -1539,7 +1543,7 @@ def generate_regular_fortune_pdf_and_consume(
     if not consumed:
         release_generation_claim_after_failure(purchase_id, logger)
         return None
-    return result, pdf_data
+    return result, pdf_data, pdf_metadata
 
 
 def generate_review_fortune_pdf_and_consume(
@@ -1610,6 +1614,7 @@ def generate_review_fortune_pdf_and_consume(
         "review_context": review_context,
         "review_fortune": review_fortune,
         "pdf_data": pdf_data,
+        "pdf_metadata": pdf_metadata,
     }
 
 
@@ -2091,6 +2096,13 @@ def render_completion_screen(product_type: str | None = None) -> None:
     )
 
 
+PDF_RECOVERY_COMPLETION_NOTICE = (
+    "生成されたPDFは、決済完了から7日間、このページから再ダウンロードできます。\n\n"
+    "再取得期限を過ぎるとダウンロードできなくなります。\n\n"
+    "このページのURLは第三者と共有しないでください。"
+)
+
+
 def has_pdf_recovery_metadata(record: dict[str, Any] | None) -> bool:
     return bool(
         record
@@ -2098,6 +2110,23 @@ def has_pdf_recovery_metadata(record: dict[str, Any] | None) -> bool:
         and record.get("pdf_object_path")
         and record.get("pdf_expires_at")
     )
+
+
+def can_show_pdf_recovery_completion_notice(record: dict[str, Any] | None) -> bool:
+    return bool(
+        is_pdf_recovery_enabled()
+        and record
+        and record.get("pdf_status") == "ready"
+        and has_pdf_recovery_metadata(record)
+        and record.get("pdf_sha256")
+        and record.get("pdf_artifact_version")
+        and not is_pdf_recovery_expired(record)
+    )
+
+
+def render_pdf_recovery_completion_notice(record: dict[str, Any] | None) -> None:
+    if can_show_pdf_recovery_completion_notice(record):
+        st.info(PDF_RECOVERY_COMPLETION_NOTICE)
 
 
 def is_pdf_recovery_expired(record: dict[str, Any] | None) -> bool:
@@ -2190,6 +2219,7 @@ def render_pdf_recovery_screen(
         mime="application/pdf",
         key=f"pdf_recovery_download_{active_purchase.get('purchase_id')}",
     )
+    render_pdf_recovery_completion_notice(active_purchase)
     render_completion_screen(product_type)
     return True
 
@@ -2425,6 +2455,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
         st.session_state.review_fortune_purchase_id = None
         st.session_state.review_pdf_bytes = None
         st.session_state.review_pdf_generated_purchase_id = None
+        st.session_state.review_pdf_recovery_metadata = None
         record = get_purchase_record(active_purchase.get("purchase_id"))
         if get_purchase_product_type(record) != PRODUCT_TYPE_REVIEW:
             st.error("見返し便の購入情報を確認できませんでした。ページを再読み込みして状態をご確認ください。")
@@ -2589,6 +2620,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
             st.session_state.review_fortune_purchase_id = active_purchase.get("purchase_id")
             st.session_state.review_pdf_bytes = completed.get("pdf_data")
             st.session_state.review_pdf_generated_purchase_id = active_purchase.get("purchase_id")
+            st.session_state.review_pdf_recovery_metadata = completed.get("pdf_metadata")
             st.session_state.review_purchase_consumed.add(purchase_id)
             review_submit_placeholder.empty()
 
@@ -2687,6 +2719,7 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 mime="application/pdf",
                 key=f"review_pdf_download_{purchase_id}",
             )
+            render_pdf_recovery_completion_notice(st.session_state.get("review_pdf_recovery_metadata"))
 
             consumed_purchase_ids = st.session_state.review_purchase_consumed
             if purchase_id and purchase_id in consumed_purchase_ids:
@@ -2890,6 +2923,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
         st.session_state.fortune_json = None
         st.session_state.fortune_pdf_bytes = None
         st.session_state.fortune_pdf_purchase_id = None
+        st.session_state.fortune_pdf_recovery_metadata = None
         record = get_purchase_record(active_purchase.get("purchase_id"))
         if not is_purchase_ready(record):
             st.error("決済済みかつ未使用の購入情報が確認できませんでした。ページを再読み込みして状態をご確認ください。")
@@ -2970,10 +3004,11 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                         st.error("解消しない場合は、お問い合わせください。")
                     return
 
-                result, pdf_data = completed
+                result, pdf_data, pdf_metadata = completed
                 st.session_state.fortune_json = result
                 st.session_state.fortune_pdf_bytes = pdf_data
                 st.session_state.fortune_pdf_purchase_id = purchase_id
+                st.session_state.fortune_pdf_recovery_metadata = pdf_metadata
                 st.session_state.user_name = payload.user_name
                 regular_submit_placeholder.empty()
 
@@ -3042,6 +3077,7 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 file_name=f"miko_letter_{safe_name}.pdf",
                 mime="application/pdf",
             )
+            render_pdf_recovery_completion_notice(st.session_state.get("fortune_pdf_recovery_metadata"))
 
         if SHOW_DEBUG:
             with st.expander("確認メモ"):

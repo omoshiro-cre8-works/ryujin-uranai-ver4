@@ -56,6 +56,7 @@ def make_streamlit_stub(access_token="token"):
         session_state=AttrDict(active_access_token=access_token),
         query_params={"purchase_id": "p_123", "access_token": access_token},
         success=lambda value, **kwargs: calls.append(("success", value)),
+        info=lambda value, **kwargs: calls.append(("info", value)),
         warning=lambda value, **kwargs: calls.append(("warning", value)),
         error=lambda value, **kwargs: calls.append(("error", value)),
         download_button=lambda **kwargs: calls.append(("download", kwargs)),
@@ -134,6 +135,7 @@ def make_recovery_purchase(**updates):
         "pdf_object_path": "pdf-recovery/p_123/artifact.pdf",
         "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
         "pdf_sha256": app.sha256_pdf(b"pdf-bytes"),
+        "pdf_artifact_version": "v1",
     }
     record.update(updates)
     return record
@@ -144,6 +146,53 @@ def stub_recovery_render_helpers(monkeypatch):
     monkeypatch.setattr(app, "render_form_gap", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_header", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_completion_screen", lambda *args, **kwargs: None)
+
+
+@pytest.mark.parametrize("product_type", [app.PRODUCT_TYPE_REGULAR, app.PRODUCT_TYPE_REVIEW])
+def test_pdf_recovery_completion_notice_shows_for_ready_recovery_purchase(monkeypatch, product_type):
+    streamlit_stub = make_streamlit_stub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
+
+    app.render_pdf_recovery_completion_notice(make_recovery_purchase(product_type=product_type))
+
+    info_calls = [call for call in streamlit_stub.calls if call[0] == "info"]
+    assert len(info_calls) == 1
+    notice = info_calls[0][1]
+    assert "決済完了から7日間" in notice
+    assert "このページから再ダウンロードできます" in notice
+    assert "再取得期限を過ぎるとダウンロードできなくなります" in notice
+    assert "このページのURLは第三者と共有しないでください" in notice
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"purchase_id": "p_legacy", "used_flag": True},
+        make_recovery_purchase(pdf_status=None),
+        make_recovery_purchase(pdf_object_path=""),
+        make_recovery_purchase(pdf_sha256=""),
+        make_recovery_purchase(pdf_artifact_version=""),
+    ],
+)
+def test_pdf_recovery_completion_notice_hides_without_ready_metadata(monkeypatch, record):
+    streamlit_stub = make_streamlit_stub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
+
+    app.render_pdf_recovery_completion_notice(record)
+
+    assert not [call for call in streamlit_stub.calls if call[0] == "info"]
+
+
+def test_pdf_recovery_completion_notice_hides_when_recovery_disabled(monkeypatch):
+    streamlit_stub = make_streamlit_stub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: False)
+
+    app.render_pdf_recovery_completion_notice(make_recovery_purchase())
+
+    assert not [call for call in streamlit_stub.calls if call[0] == "info"]
 
 
 def test_prepare_pdf_recovery_metadata_is_disabled_when_env_missing(monkeypatch):
@@ -162,6 +211,7 @@ def test_prepare_pdf_recovery_metadata_is_disabled_when_env_missing(monkeypatch)
 def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monkeypatch):
     calls = []
     payload = SimpleNamespace(user_name="テストユーザー")
+    metadata = {"pdf_status": "ready"}
     monkeypatch.setattr(
         app,
         "claim_purchase_generation",
@@ -172,7 +222,7 @@ def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monke
     monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release"))
     monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
     monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
-    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or {"pdf_status": "ready"})
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
     monkeypatch.setattr(
         app,
         "consume_purchase",
@@ -181,8 +231,8 @@ def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monke
 
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", SimpleNamespace())
 
-    assert completed == ({"miko_intro": "result"}, b"pdf")
-    assert calls == ["claim", "gemini", "pdf", "upload", ("consume", {"pdf_status": "ready"})]
+    assert completed == ({"miko_intro": "result"}, b"pdf", metadata)
+    assert calls == ["claim", "gemini", "pdf", "upload", ("consume", metadata)]
 
 
 @pytest.mark.parametrize(
@@ -277,7 +327,7 @@ def test_regular_generation_non_production_missing_bucket_preserves_fallback_con
 
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
 
-    assert completed == ({"miko_intro": "result"}, b"pdf")
+    assert completed == ({"miko_intro": "result"}, b"pdf", None)
     assert calls == ["claim", "gemini", "pdf", "fallback", ("consume", None)]
 
 

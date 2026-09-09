@@ -90,6 +90,7 @@ def test_review_generation_consumes_only_after_summary_fortune_and_pdf(monkeypat
         "review_context": review_context,
         "review_fortune": review_fortune,
         "pdf_data": b"pdf",
+        "pdf_metadata": None,
     }
     assert calls == ["claim", "summary", "context", "fortune", "pdf", "consume"]
 

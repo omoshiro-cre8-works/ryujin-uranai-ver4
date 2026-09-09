@@ -50,7 +50,7 @@ def test_regular_generation_consumes_only_after_gemini_and_pdf(monkeypatch):
         SimpleNamespace(),
     )
 
-    assert completed == (result, b"pdf")
+    assert completed == (result, b"pdf", None)
     assert calls == ["claim", "gemini", "pdf", "consume"]
 
 
