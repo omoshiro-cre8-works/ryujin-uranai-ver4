@@ -520,14 +520,33 @@ def test_interrupted_ready_purchase_finalizes_with_consume_only(monkeypatch):
         "can_finalize_interrupted_pdf_generation",
         lambda active_purchase, access_token: calls.append(("check", access_token)) or True,
     )
-    monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger: calls.append("consume") or True)
+    monkeypatch.setattr(
+        app,
+        "consume_purchase",
+        lambda purchase_id, logger, **kwargs: calls.append(("consume", kwargs)) or True,
+    )
     monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: dict(record, used_flag=True, generation_processing=False))
 
     finalized = app.finalize_interrupted_pdf_generation_if_ready(record, RecordingLogger())
 
     assert finalized["used_flag"] is True
     assert finalized["generation_processing"] is False
-    assert calls == [("check", "token"), "consume"]
+    assert calls == [
+        ("check", "token"),
+        (
+            "consume",
+            {
+                "require_ready_pdf_metadata": True,
+                "require_generation_processing": True,
+                "expected_pdf_metadata": {
+                    "pdf_object_path": record["pdf_object_path"],
+                    "pdf_expires_at": record["pdf_expires_at"],
+                    "pdf_sha256": record["pdf_sha256"],
+                    "pdf_artifact_version": record["pdf_artifact_version"],
+                },
+            },
+        ),
+    ]
 
 
 def test_recovery_download_works_from_url_token_and_empty_pdf_session(monkeypatch):

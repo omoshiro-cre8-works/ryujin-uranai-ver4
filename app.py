@@ -1447,12 +1447,19 @@ def consume_purchase(
     purchase_id: str,
     logger: logging.Logger,
     pdf_metadata: dict[str, Any] | None = None,
+    *,
+    require_ready_pdf_metadata: bool = False,
+    require_generation_processing: bool = False,
+    expected_pdf_metadata: dict[str, Any] | None = None,
 ) -> bool:
     try:
         consumed = consume_purchase_transaction(
             purchase_id,
             str(st.session_state.get("active_access_token") or ""),
             pdf_metadata=pdf_metadata,
+            require_ready_pdf_metadata=require_ready_pdf_metadata,
+            require_generation_processing=require_generation_processing,
+            expected_pdf_metadata=expected_pdf_metadata,
         )
     except Exception:
         logger.exception(
@@ -1470,6 +1477,15 @@ def consume_purchase(
         },
     )
     return True
+
+
+def get_recovery_pdf_metadata_snapshot(purchase: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "pdf_object_path": purchase.get("pdf_object_path"),
+        "pdf_expires_at": purchase.get("pdf_expires_at"),
+        "pdf_sha256": purchase.get("pdf_sha256"),
+        "pdf_artifact_version": purchase.get("pdf_artifact_version"),
+    }
 
 
 def finalize_interrupted_pdf_generation_if_ready(
@@ -1492,7 +1508,14 @@ def finalize_interrupted_pdf_generation_if_ready(
         "pdf_recovery_interrupted_finalize_started",
         extra={"purchase_ref": mask_purchase_id(purchase_id)},
     )
-    if not consume_purchase(purchase_id, logger):
+    expected_pdf_metadata = get_recovery_pdf_metadata_snapshot(active_purchase)
+    if not consume_purchase(
+        purchase_id,
+        logger,
+        require_ready_pdf_metadata=True,
+        require_generation_processing=True,
+        expected_pdf_metadata=expected_pdf_metadata,
+    ):
         logger.warning(
             "pdf_recovery_interrupted_finalize_rejected",
             extra={"purchase_ref": mask_purchase_id(purchase_id)},

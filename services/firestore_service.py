@@ -30,6 +30,12 @@ PDF_METADATA_FIELDS = (
     "pdf_sha256",
     "pdf_artifact_version",
 )
+PDF_CONSUME_ONLY_MATCH_FIELDS = (
+    "pdf_object_path",
+    "pdf_expires_at",
+    "pdf_sha256",
+    "pdf_artifact_version",
+)
 
 
 def _now_utc() -> datetime:
@@ -309,6 +315,20 @@ def _pdf_metadata_matches_existing(
     return True
 
 
+def _pdf_metadata_matches_expected(
+    purchase: Dict[str, Any],
+    expected_pdf_metadata: Dict[str, Any] | None,
+) -> bool:
+    if not expected_pdf_metadata:
+        return False
+
+    for field in PDF_CONSUME_ONLY_MATCH_FIELDS:
+        expected = expected_pdf_metadata.get(field)
+        if not expected or purchase.get(field) != expected:
+            return False
+    return True
+
+
 def can_recover_purchase_pdf(
     purchase: Dict[str, Any] | None,
     access_token: str,
@@ -471,6 +491,10 @@ def consume_purchase_transaction(
     purchase_id: str,
     access_token: str,
     pdf_metadata: Dict[str, Any] | None = None,
+    *,
+    require_ready_pdf_metadata: bool = False,
+    require_generation_processing: bool = False,
+    expected_pdf_metadata: Dict[str, Any] | None = None,
 ) -> bool:
     """
     transaction 内で購入情報を再確認し、利用可能な場合だけ使用済みにする。
@@ -496,6 +520,15 @@ def consume_purchase_transaction(
         if not _access_token_matches(purchase, access_token):
             return False
         if not _purchase_token_is_active(purchase):
+            return False
+        if require_generation_processing and purchase.get("generation_processing") is not True:
+            return False
+        if require_ready_pdf_metadata and not _has_ready_pdf_metadata(purchase):
+            return False
+        if require_ready_pdf_metadata and not _pdf_metadata_matches_expected(
+            purchase,
+            expected_pdf_metadata,
+        ):
             return False
         if pdf_metadata and (
             not _pdf_metadata_is_valid(pdf_metadata)

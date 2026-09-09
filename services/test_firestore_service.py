@@ -199,11 +199,11 @@ def _consume_record(**updates):
     return token, record
 
 
-def _run_consume(monkeypatch, record, token):
+def _run_consume(monkeypatch, record, token, **kwargs):
     client = FakeFirestoreClient([record])
     monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
     monkeypatch.setattr(firestore_service.firestore, "transactional", lambda func: func)
-    consumed = firestore_service.consume_purchase_transaction("p_transaction", token)
+    consumed = firestore_service.consume_purchase_transaction("p_transaction", token, **kwargs)
     return consumed, client
 
 
@@ -509,6 +509,101 @@ def test_consume_purchase_transaction_rejects_conflicting_pdf_metadata(monkeypat
 
     assert consumed is False
     assert client.transaction_ref.updates == []
+
+
+def _run_consume_only_recovery(monkeypatch, record, token, expected_metadata):
+    return _run_consume(
+        monkeypatch,
+        record,
+        token,
+        require_ready_pdf_metadata=True,
+        require_generation_processing=True,
+        expected_pdf_metadata=expected_metadata,
+    )
+
+
+def test_consume_only_recovery_revalidates_ready_metadata_in_transaction(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is True
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["used_flag"] is True
+    assert updates["generation_processing"] is False
+
+
+def test_consume_only_recovery_rejects_if_processing_changed_after_precheck(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=False, **metadata)
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_only_recovery_rejects_if_pdf_status_changed_after_precheck(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+    record["pdf_status"] = "processing"
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_only_recovery_rejects_if_object_path_changed_after_precheck(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+    record["pdf_object_path"] = "pdf-recovery/p_transaction/other.pdf"
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_only_recovery_rejects_if_sha_changed_after_precheck(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+    record["pdf_sha256"] = "b" * 64
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_consume_only_recovery_rejects_if_expiry_changed_to_past_after_precheck(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+    record["pdf_expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
+def test_second_consume_only_recovery_call_is_rejected_after_first_commit(monkeypatch):
+    metadata = _pdf_metadata()
+    token, record = _consume_record(generation_processing=True, **metadata)
+
+    first, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+    second = firestore_service.consume_purchase_transaction(
+        "p_transaction",
+        token,
+        require_ready_pdf_metadata=True,
+        require_generation_processing=True,
+        expected_pdf_metadata=metadata,
+    )
+
+    assert first is True
+    assert second is False
+    assert len(client.transaction_ref.updates) == 1
 
 
 def test_can_finalize_interrupted_pdf_generation_allows_processing_ready_metadata():
