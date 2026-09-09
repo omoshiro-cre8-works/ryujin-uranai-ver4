@@ -5,7 +5,8 @@ from reportlab.pdfgen import canvas
 
 from services import fortune_service
 from services.pdf_service import generate_miko_letter_pdf, generate_review_fortune_pdf, register_japanese_font
-from services.review_pdf_validation_service import validate_review_pdf_deterministic
+from services import review_pdf_validation_service
+from services.review_pdf_validation_service import _parse_tounicode_cmap, validate_review_pdf_deterministic
 from services.validation_service import validate_review_pdf_content
 
 
@@ -137,6 +138,58 @@ def test_title_only_mimic_pdf_is_rejected():
     assert result["validation_method"] == "deterministic_reject"
 
 
+def test_review_meta_labels_only_mimic_pdf_is_rejected():
+    pdf_bytes = make_simple_pdf(
+        [
+            "龍神さまのお告げ 見返し便",
+            "令和 8年 9月 9日",
+            "前回のお告げ：2026年1月2日",
+            "今回の見返し：2026年9月9日",
+            "見返しテーマ：仕事運",
+            "結び",
+            "龍神湖神社 巫女 拝",
+        ]
+    )
+
+    result = validate_review_pdf_deterministic(pdf_bytes)
+
+    assert not result["is_valid_previous_pdf"]
+    assert result["validation_method"] == "deterministic_reject"
+    assert result["diagnostics"]["review_meta_label_count"] >= 3
+    assert result["diagnostics"]["review_body_section_count"] < 3
+
+
+def test_review_pdf_without_labeled_previous_date_does_not_use_cover_date_as_previous(monkeypatch):
+    pdf_bytes = make_simple_pdf(
+        [
+            "龍神さまのお告げ 見返し便",
+            "令和 8年 9月 9日",
+            "はじめに",
+            "前回のお告げから続いている流れ",
+            "現在の手相と近況から見える変化",
+            "今回のテーマについての見返し",
+            "これから3カ月の小さな行動",
+            "巫女の助言",
+            "龍神湖神社 巫女 拝",
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        fortune_service,
+        "call_gemini_review_pdf_analysis",
+        lambda pdf: calls.append(pdf) or {"is_valid_previous_pdf": False, "previous_reading_date": ""},
+    )
+
+    deterministic_result = validate_review_pdf_deterministic(pdf_bytes)
+    fallback_result = validate_review_pdf_content(pdf_bytes)
+
+    assert deterministic_result["validation_method"] == "gemini_fallback"
+    assert deterministic_result["previous_reading_date"] == ""
+    assert deterministic_result["previous_reading_date_confidence"] == "low"
+    assert calls == [pdf_bytes]
+    assert fallback_result["validation_method"] == "gemini_fallback"
+
+
 def test_missing_profile_structure_uses_gemini_fallback(monkeypatch):
     pdf_bytes = make_simple_pdf(
         [
@@ -209,6 +262,121 @@ def test_broken_pdf_is_rejected():
 
     assert not result["is_valid_previous_pdf"]
     assert result["validation_method"] == "deterministic_reject"
+
+
+def test_custom_extraction_failure_uses_pypdf_extract_text_for_validation(monkeypatch):
+    class FakeContents:
+        def get_data(self):
+            return b""
+
+    class FakePage:
+        def get(self, key):
+            if key == "/Resources":
+                return {}
+            return None
+
+        def get_contents(self):
+            return FakeContents()
+
+        def extract_text(self):
+            return "\n".join(
+                [
+                    "龍神さまのお告げ",
+                    "龍神さまの鑑定書",
+                    "令和 8年 9月 9日",
+                    "鑑定のまとめ",
+                    "手相の導き",
+                    "姓名判断",
+                    "四柱推命",
+                    "直近：これから3カ月以内の運勢",
+                    "展望：これから1年先の運勢",
+                    "巫女の助言",
+                    "結び",
+                    "龍神湖神社 巫女 拝",
+                ]
+            )
+
+    class FakeReader:
+        is_encrypted = False
+        pages = [FakePage()]
+
+        def __init__(self, _stream):
+            pass
+
+    monkeypatch.setattr(review_pdf_validation_service, "PdfReader", FakeReader)
+
+    result = validate_review_pdf_deterministic(b"%PDF-1.4\nfake")
+
+    assert result["is_valid_previous_pdf"]
+    assert result["validation_method"] == "deterministic_regular"
+    assert result["diagnostics"]["text_extraction_method"] == "pypdf_extract_text"
+
+
+def test_custom_and_standard_extraction_without_enough_text_uses_gemini_fallback(monkeypatch):
+    class FakeContents:
+        def get_data(self):
+            return b""
+
+    class FakePage:
+        def get(self, key):
+            if key == "/Resources":
+                return {}
+            return None
+
+        def get_contents(self):
+            return FakeContents()
+
+        def extract_text(self):
+            return "短い"
+
+    class FakeReader:
+        is_encrypted = False
+        pages = [FakePage()]
+
+        def __init__(self, _stream):
+            pass
+
+    monkeypatch.setattr(review_pdf_validation_service, "PdfReader", FakeReader)
+
+    result = validate_review_pdf_deterministic(b"%PDF-1.4\nfake")
+
+    assert not result["is_valid_previous_pdf"]
+    assert result["validation_method"] == "gemini_fallback"
+
+
+def test_tounicode_cmap_maps_beginbfchar_entries_only():
+    cmap = _parse_tounicode_cmap(
+        b"""
+        begincmap
+        1 begincodespacerange
+        <00> <FF>
+        endcodespacerange
+        2 beginbfchar
+        <01> <9F8D>
+        <02> <795E>
+        endbfchar
+        endcmap
+        """
+    )
+
+    assert cmap == {b"\x01": "龍", b"\x02": "神"}
+
+
+def test_tounicode_cmap_does_not_treat_codespacerange_or_bfrange_as_bfchar():
+    cmap = _parse_tounicode_cmap(
+        b"""
+        begincmap
+        1 begincodespacerange
+        <00> <FF>
+        endcodespacerange
+        1 beginbfrange
+        <10> <12> <3042>
+        endbfrange
+        endcmap
+        """
+    )
+
+    assert cmap == {}
 
 
 def test_review_pdf_analysis_prompt_includes_regular_review_and_legacy_rules():

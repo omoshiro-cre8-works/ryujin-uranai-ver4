@@ -38,11 +38,14 @@ REVIEW_CURRENT_SECTIONS = [
     '結び',
 ]
 
-REVIEW_ALIAS_SECTIONS = [
-    'はじめに',
+REVIEW_META_LABELS = [
     '前回のお告げ',
     '今回の見返し',
     '見返しテーマ',
+]
+
+REVIEW_BODY_ALIAS_SECTIONS = [
+    'はじめに',
     '前回のお告げの振り返り',
     '前回のお告げから続いている流れ',
     '現在の手相と近況から見える変化',
@@ -57,6 +60,7 @@ REVIEW_ALIAS_SECTIONS = [
     '龍神さまからの見返しのことば',
     '心に留めること',
 ]
+REVIEW_ALIAS_SECTIONS = [*REVIEW_META_LABELS, *REVIEW_BODY_ALIAS_SECTIONS]
 
 BRAND_TEXT = '龍神さまのお告げ'
 REGULAR_TITLE = '龍神さまの鑑定書'
@@ -81,14 +85,20 @@ def _decode_utf16_hex(hex_text: str) -> str:
 
 
 def _parse_tounicode_cmap(raw_cmap: bytes) -> dict[bytes, str]:
+    """Parse only beginbfchar/endbfchar entries from a ToUnicode CMap.
+
+    beginbfrange and codespacerange blocks are intentionally ignored here. They
+    have different semantics and must not be treated as one-to-one mappings.
+    """
     text = raw_cmap.decode('latin1', errors='ignore')
     mapping: dict[bytes, str] = {}
 
-    for source, target in re.findall(r'<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>', text):
-        try:
-            mapping[bytes.fromhex(source)] = _decode_utf16_hex(target)
-        except ValueError:
-            continue
+    for block in re.findall(r'beginbfchar\s*(.*?)\s*endbfchar', text, flags=re.DOTALL):
+        for source, target in re.findall(r'<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>', block):
+            try:
+                mapping[bytes.fromhex(source)] = _decode_utf16_hex(target)
+            except ValueError:
+                continue
 
     return mapping
 
@@ -202,13 +212,17 @@ def _extract_page_text_from_content(content: bytes, cmaps: dict[str, dict[bytes,
     return '\n'.join(parts)
 
 
+def _japanese_signal_score(text: str) -> int:
+    return len(re.findall(r'[ぁ-んァ-ン一-龯]', text or ''))
+
+
 def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     if reader.is_encrypted:
         return ExtractedPdfText('', len(reader.pages), True, 0, 'pypdf_tounicode_cmap')
 
-    page_texts: list[str] = []
-    readable_pages = 0
+    custom_page_texts: list[str] = []
+    custom_readable_pages = 0
     for page in reader.pages:
         try:
             content = page.get_contents().get_data()
@@ -216,9 +230,29 @@ def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
         except Exception:
             text = ''
         if text.strip():
-            readable_pages += 1
-        page_texts.append(text)
-    return ExtractedPdfText('\n'.join(page_texts), len(reader.pages), False, readable_pages, 'pypdf_tounicode_cmap')
+            custom_readable_pages += 1
+        custom_page_texts.append(text)
+
+    custom_text = '\n'.join(custom_page_texts)
+    if _japanese_signal_score(custom_text) >= 8:
+        return ExtractedPdfText(custom_text, len(reader.pages), False, custom_readable_pages, 'pypdf_tounicode_cmap')
+
+    standard_page_texts: list[str] = []
+    standard_readable_pages = 0
+    for page in reader.pages:
+        try:
+            text = page.extract_text() or ''
+        except Exception:
+            text = ''
+        if text.strip():
+            standard_readable_pages += 1
+        standard_page_texts.append(text)
+
+    standard_text = '\n'.join(standard_page_texts)
+    if _japanese_signal_score(standard_text) > _japanese_signal_score(custom_text):
+        return ExtractedPdfText(standard_text, len(reader.pages), False, standard_readable_pages, 'pypdf_extract_text')
+
+    return ExtractedPdfText(custom_text, len(reader.pages), False, custom_readable_pages, 'pypdf_tounicode_cmap')
 
 
 def _normalize_pdf_text(text: str) -> str:
@@ -232,6 +266,15 @@ def _contains_any(text: str, values: list[str]) -> bool:
 
 def _detected(values: list[str], text: str) -> list[str]:
     return [value for value in values if value.replace('：', ':') in text]
+
+
+def _detected_heading_sections(values: list[str], text: str) -> list[str]:
+    detected: list[str] = []
+    for value in values:
+        normalized = value.replace('：', ':')
+        if f'【{normalized}】' in text or f'[{normalized}]' in text:
+            detected.append(value)
+    return detected
 
 
 def _normalize_date_match(match: re.Match[str]) -> tuple[str, str]:
@@ -373,13 +416,22 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
     if extracted.page_count < 1 or extracted.readable_pages < 1:
         return _analysis_result(
             accepted=False,
-            confidence='high',
-            reason='PDF本文を読み取れませんでした。',
-            validation_method='deterministic_reject',
+            confidence='low',
+            reason='PDF本文の構造判定に必要なテキストを十分に抽出できないためGeminiで確認します。',
+            validation_method='gemini_fallback',
             diagnostics={**diagnostics, 'failed_step': 'text_extraction'},
         )
 
     text = _normalize_pdf_text(extracted.text)
+    if _japanese_signal_score(text) < 8:
+        return _analysis_result(
+            accepted=False,
+            confidence='low',
+            reason='PDF本文の日本語テキストを十分に抽出できないためGeminiで確認します。',
+            validation_method='gemini_fallback',
+            diagnostics={**diagnostics, 'failed_step': 'insufficient_text_signal'},
+        )
+
     first_date, first_date_original = _extract_reading_date(text)
     has_brand = BRAND_TEXT in text
     has_footer = FOOTER_TEXT in text
@@ -389,6 +441,9 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
     regular_divinations = _detected(REGULAR_DIVINATION_SECTIONS, text)
     regular_timelines = _detected(REGULAR_TIMELINE_SECTIONS, text)
     regular_detected = _detected(REGULAR_REQUIRED_SECTIONS, text)
+    review_meta_labels = _detected(REVIEW_META_LABELS, text)
+    review_body_aliases = _detected(REVIEW_BODY_ALIAS_SECTIONS, text)
+    review_heading_sections = _detected_heading_sections([*REVIEW_CURRENT_SECTIONS, *REVIEW_BODY_ALIAS_SECTIONS], text)
     review_aliases = _detected(REVIEW_ALIAS_SECTIONS, text)
     review_detected = _detected(REVIEW_CURRENT_SECTIONS, text)
 
@@ -401,7 +456,9 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
             'has_review_title': has_review_title,
             'regular_divination_section_count': len(regular_divinations),
             'regular_timeline_section_count': len(regular_timelines),
-            'review_alias_section_count': len(review_aliases),
+            'review_meta_label_count': len(review_meta_labels),
+            'review_body_section_count': len(review_body_aliases),
+            'review_heading_section_count': len(review_heading_sections),
         }
     )
 
@@ -419,9 +476,10 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
         )
 
     review_previous_date, review_previous_date_original = _extract_review_previous_reading_date(text)
-    review_result_date = review_previous_date or first_date
-    review_result_date_original = review_previous_date_original or first_date_original
-    if has_brand and first_date and has_footer and has_review_title and len(review_aliases) >= 3 and _contains_any(text, ['巫女の助言', '結び']):
+    review_result_date = review_previous_date
+    review_result_date_original = review_previous_date_original
+    review_body_count = len(set(review_body_aliases))
+    if has_brand and first_date and has_footer and has_review_title and review_previous_date and review_body_count >= 3 and _contains_any(text, ['巫女の助言', '結び']):
         return _analysis_result(
             accepted=True,
             confidence='high',
@@ -447,17 +505,30 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
             diagnostics={**diagnostics, 'failed_step': 'required_structure'},
         )
 
-    if (has_regular_title or has_review_title) and not regular_divinations and len(review_aliases) < 2:
+    if has_review_title and review_body_count < 3:
         return _analysis_result(
             accepted=False,
             confidence='high',
-            reason='タイトルは確認できましたが、正規PDFとして必要な章構造を確認できませんでした。',
+            reason='見返し便タイトルは確認できましたが、正規PDFとして必要な本文章構造を確認できませんでした。',
             validation_method='deterministic_reject',
             previous_reading_date=review_result_date,
             previous_reading_date_original=review_result_date_original,
             detected_sections=list(dict.fromkeys([*regular_detected, *review_detected, *review_aliases])),
             missing_sections=[],
-            diagnostics={**diagnostics, 'failed_step': 'title_only'},
+            diagnostics={**diagnostics, 'failed_step': 'review_body_sections_insufficient'},
+        )
+
+    if has_regular_title and not regular_divinations:
+        return _analysis_result(
+            accepted=False,
+            confidence='high',
+            reason='通常版タイトルは確認できましたが、正規PDFとして必要な占術章を確認できませんでした。',
+            validation_method='deterministic_reject',
+            previous_reading_date=first_date,
+            previous_reading_date_original=first_date_original,
+            detected_sections=list(dict.fromkeys([*regular_detected, *review_detected, *review_aliases])),
+            missing_sections=[],
+            diagnostics={**diagnostics, 'failed_step': 'regular_divination_sections_missing'},
         )
 
     return _analysis_result(
