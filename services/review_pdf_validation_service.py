@@ -216,10 +216,9 @@ def _japanese_signal_score(text: str) -> int:
     return len(re.findall(r'[ぁ-んァ-ン一-龯]', text or ''))
 
 
-def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+def _extract_pdf_text_candidates(reader: PdfReader) -> list[ExtractedPdfText]:
     if reader.is_encrypted:
-        return ExtractedPdfText('', len(reader.pages), True, 0, 'pypdf_tounicode_cmap')
+        return [ExtractedPdfText('', len(reader.pages), True, 0, 'pypdf_tounicode_cmap')]
 
     custom_page_texts: list[str] = []
     custom_readable_pages = 0
@@ -233,10 +232,6 @@ def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
             custom_readable_pages += 1
         custom_page_texts.append(text)
 
-    custom_text = '\n'.join(custom_page_texts)
-    if _japanese_signal_score(custom_text) >= 8:
-        return ExtractedPdfText(custom_text, len(reader.pages), False, custom_readable_pages, 'pypdf_tounicode_cmap')
-
     standard_page_texts: list[str] = []
     standard_readable_pages = 0
     for page in reader.pages:
@@ -248,11 +243,16 @@ def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
             standard_readable_pages += 1
         standard_page_texts.append(text)
 
-    standard_text = '\n'.join(standard_page_texts)
-    if _japanese_signal_score(standard_text) > _japanese_signal_score(custom_text):
-        return ExtractedPdfText(standard_text, len(reader.pages), False, standard_readable_pages, 'pypdf_extract_text')
+    return [
+        ExtractedPdfText('\n'.join(custom_page_texts), len(reader.pages), False, custom_readable_pages, 'pypdf_tounicode_cmap'),
+        ExtractedPdfText('\n'.join(standard_page_texts), len(reader.pages), False, standard_readable_pages, 'pypdf_extract_text'),
+    ]
 
-    return ExtractedPdfText(custom_text, len(reader.pages), False, custom_readable_pages, 'pypdf_tounicode_cmap')
+
+def extract_reportlab_pdf_text(pdf_bytes: bytes) -> ExtractedPdfText:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    candidates = _extract_pdf_text_candidates(reader)
+    return max(candidates, key=lambda candidate: _japanese_signal_score(candidate.text))
 
 
 def _normalize_pdf_text(text: str) -> str:
@@ -372,39 +372,35 @@ def _analysis_result(
     return _with_date_deltas(result)
 
 
-def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
-    diagnostics: dict[str, Any] = {
-        'validation_method': 'deterministic_structural',
-        'pdf_size_bytes': len(pdf_bytes),
-    }
-    if not pdf_bytes.startswith(b'%PDF'):
-        return _analysis_result(
-            accepted=False,
-            confidence='high',
-            reason='PDFヘッダーを確認できませんでした。',
-            validation_method='deterministic_reject',
-            diagnostics={**diagnostics, 'failed_step': 'pdf_header'},
-        )
-
-    try:
-        extracted = extract_reportlab_pdf_text(pdf_bytes)
-    except Exception as exc:
-        return _analysis_result(
-            accepted=False,
-            confidence='high',
-            reason='PDFを読み取れませんでした。',
-            validation_method='deterministic_reject',
-            diagnostics={**diagnostics, 'failed_step': 'pdf_read', 'error_type': type(exc).__name__},
-        )
-
-    diagnostics.update(
-        {
-            'page_count': extracted.page_count,
-            'readable_pages': extracted.readable_pages,
-            'encrypted': extracted.encrypted,
-            'text_extraction_method': extracted.extraction_method,
-        }
+def _structure_score(result: dict[str, Any]) -> int:
+    diagnostics = result.get('diagnostics') or {}
+    if result.get('is_valid_previous_pdf'):
+        return 1000
+    return (
+        int(bool(diagnostics.get('has_brand'))) * 20
+        + int(bool(diagnostics.get('has_reading_date'))) * 20
+        + int(bool(diagnostics.get('has_footer'))) * 20
+        + int(bool(diagnostics.get('has_regular_title'))) * 10
+        + int(bool(diagnostics.get('has_review_title'))) * 10
+        + int(diagnostics.get('regular_divination_section_count') or 0) * 6
+        + int(diagnostics.get('regular_timeline_section_count') or 0) * 6
+        + int(diagnostics.get('review_body_section_count') or 0) * 6
+        + int(diagnostics.get('review_heading_section_count') or 0) * 3
     )
+
+
+def _evaluate_pdf_text(
+    extracted: ExtractedPdfText,
+    base_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    diagnostics = {
+        **base_diagnostics,
+        'page_count': extracted.page_count,
+        'readable_pages': extracted.readable_pages,
+        'encrypted': extracted.encrypted,
+        'text_extraction_method': extracted.extraction_method,
+        'japanese_signal_score': _japanese_signal_score(extracted.text),
+    }
     if extracted.encrypted:
         return _analysis_result(
             accepted=False,
@@ -542,3 +538,36 @@ def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
         missing_sections=[],
         diagnostics=diagnostics,
     )
+
+
+def validate_review_pdf_deterministic(pdf_bytes: bytes) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        'validation_method': 'deterministic_structural',
+        'pdf_size_bytes': len(pdf_bytes),
+    }
+    if not pdf_bytes.startswith(b'%PDF'):
+        return _analysis_result(
+            accepted=False,
+            confidence='high',
+            reason='PDFヘッダーを確認できませんでした。',
+            validation_method='deterministic_reject',
+            diagnostics={**diagnostics, 'failed_step': 'pdf_header'},
+        )
+
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        candidates = _extract_pdf_text_candidates(reader)
+    except Exception as exc:
+        return _analysis_result(
+            accepted=False,
+            confidence='high',
+            reason='PDFを読み取れませんでした。',
+            validation_method='deterministic_reject',
+            diagnostics={**diagnostics, 'failed_step': 'pdf_read', 'error_type': type(exc).__name__},
+        )
+
+    results = [_evaluate_pdf_text(candidate, diagnostics) for candidate in candidates]
+    accepted_results = [result for result in results if result.get('is_valid_previous_pdf')]
+    if accepted_results:
+        return max(accepted_results, key=_structure_score)
+    return max(results, key=_structure_score)

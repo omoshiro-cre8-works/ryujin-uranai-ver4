@@ -312,6 +312,118 @@ def test_custom_extraction_failure_uses_pypdf_extract_text_for_validation(monkey
     assert result["diagnostics"]["text_extraction_method"] == "pypdf_extract_text"
 
 
+def test_partial_custom_extraction_still_tries_standard_and_accepts(monkeypatch):
+    class FakeContents:
+        def get_data(self):
+            return b"partial custom content"
+
+    class FakePage:
+        def get(self, key):
+            if key == "/Resources":
+                return {}
+            return None
+
+        def get_contents(self):
+            return FakeContents()
+
+        def extract_text(self):
+            return "\n".join(
+                [
+                    "龍神さまのお告げ 見返し便",
+                    "令和 8年 9月 9日",
+                    "前回のお告げ：2026年1月2日",
+                    "見返しテーマ：仕事運",
+                    "はじめに",
+                    "前回のお告げから続いている流れ",
+                    "現在の手相と近況から見える変化",
+                    "今回のテーマについての見返し",
+                    "巫女の助言",
+                    "龍神湖神社 巫女 拝",
+                ]
+            )
+
+    class FakeReader:
+        is_encrypted = False
+        pages = [FakePage()]
+
+        def __init__(self, _stream):
+            pass
+
+    monkeypatch.setattr(review_pdf_validation_service, "PdfReader", FakeReader)
+    monkeypatch.setattr(
+        review_pdf_validation_service,
+        "_extract_page_text_from_content",
+        lambda _content, _cmaps: "\n".join(
+            [
+                "龍神さまのお告げ 見返し便",
+                "令和 8年 9月 9日",
+                "前回のお告げ：2026年1月2日",
+                "龍神湖神社 巫女 拝",
+            ]
+        ),
+    )
+
+    result = validate_review_pdf_deterministic(b"%PDF-1.4\nfake")
+
+    assert result["is_valid_previous_pdf"]
+    assert result["validation_method"] == "deterministic_review"
+    assert result["previous_reading_date"] == "2026-01-02"
+    assert result["diagnostics"]["text_extraction_method"] == "pypdf_extract_text"
+
+
+def test_complete_custom_extraction_accept_is_not_changed_by_standard_fallback(monkeypatch):
+    class FakeContents:
+        def get_data(self):
+            return b"complete custom content"
+
+    class FakePage:
+        def get(self, key):
+            if key == "/Resources":
+                return {}
+            return None
+
+        def get_contents(self):
+            return FakeContents()
+
+        def extract_text(self):
+            return "請求書\n2026年9月9日\n合計 1000円"
+
+    class FakeReader:
+        is_encrypted = False
+        pages = [FakePage()]
+
+        def __init__(self, _stream):
+            pass
+
+    monkeypatch.setattr(review_pdf_validation_service, "PdfReader", FakeReader)
+    monkeypatch.setattr(
+        review_pdf_validation_service,
+        "_extract_page_text_from_content",
+        lambda _content, _cmaps: "\n".join(
+            [
+                "龍神さまのお告げ",
+                "龍神さまの鑑定書",
+                "令和 8年 9月 9日",
+                "鑑定のまとめ",
+                "手相の導き",
+                "姓名判断",
+                "四柱推命",
+                "直近：これから3カ月以内の運勢",
+                "展望：これから1年先の運勢",
+                "巫女の助言",
+                "結び",
+                "龍神湖神社 巫女 拝",
+            ]
+        ),
+    )
+
+    result = validate_review_pdf_deterministic(b"%PDF-1.4\nfake")
+
+    assert result["is_valid_previous_pdf"]
+    assert result["validation_method"] == "deterministic_regular"
+    assert result["diagnostics"]["text_extraction_method"] == "pypdf_tounicode_cmap"
+
+
 def test_custom_and_standard_extraction_without_enough_text_uses_gemini_fallback(monkeypatch):
     class FakeContents:
         def get_data(self):
