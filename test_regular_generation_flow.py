@@ -43,6 +43,11 @@ def test_regular_generation_consumes_only_after_gemini_and_pdf(monkeypatch):
         "consume_purchase",
         lambda purchase_id, logger: calls.append("consume") or True,
     )
+    monkeypatch.setattr(
+        app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+    )
 
     completed = app.generate_regular_fortune_pdf_and_consume(
         payload,
@@ -51,7 +56,7 @@ def test_regular_generation_consumes_only_after_gemini_and_pdf(monkeypatch):
     )
 
     assert completed == (result, b"pdf", None)
-    assert calls == ["claim", "gemini", "pdf", "consume"]
+    assert calls == ["claim", "gemini", "pdf", "metadata", "consume"]
 
 
 def test_regular_generation_does_not_consume_when_gemini_fails(monkeypatch):
@@ -140,6 +145,11 @@ def test_regular_generation_returns_none_when_consume_fails(monkeypatch):
         "consume_purchase",
         lambda purchase_id, logger: calls.append("consume") or False,
     )
+    monkeypatch.setattr(
+        app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+    )
 
     completed = app.generate_regular_fortune_pdf_and_consume(
         payload,
@@ -148,7 +158,7 @@ def test_regular_generation_returns_none_when_consume_fails(monkeypatch):
     )
 
     assert completed is None
-    assert calls == ["claim", "gemini", "pdf", "consume", "release"]
+    assert calls == ["claim", "gemini", "pdf", "metadata", "consume", "release"]
 
 
 def test_regular_generation_does_not_call_gemini_when_claim_fails(monkeypatch):

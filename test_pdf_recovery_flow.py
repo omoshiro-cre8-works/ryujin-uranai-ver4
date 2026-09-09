@@ -133,6 +133,7 @@ def make_recovery_purchase(**updates):
         "access_token_hash": app.hashlib.sha256(b"token").hexdigest(),
         "pdf_status": "ready",
         "pdf_object_path": "pdf-recovery/p_123/artifact.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
         "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
         "pdf_sha256": app.sha256_pdf(b"pdf-bytes"),
         "pdf_artifact_version": "v1",
@@ -211,7 +212,14 @@ def test_prepare_pdf_recovery_metadata_is_disabled_when_env_missing(monkeypatch)
 def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monkeypatch):
     calls = []
     payload = SimpleNamespace(user_name="テストユーザー")
-    metadata = {"pdf_status": "ready"}
+    metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_123/artifact.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
+        "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
+        "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
+    }
     monkeypatch.setattr(
         app,
         "claim_purchase_generation",
@@ -225,6 +233,11 @@ def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monke
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
     monkeypatch.setattr(
         app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append(("metadata", pdf_metadata)) or True,
+    )
+    monkeypatch.setattr(
+        app,
         "consume_purchase",
         lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True,
     )
@@ -232,7 +245,7 @@ def test_regular_generation_uploads_before_consuming_when_recovery_enabled(monke
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", SimpleNamespace())
 
     assert completed == ({"miko_intro": "result"}, b"pdf", metadata)
-    assert calls == ["claim", "gemini", "pdf", "upload", ("consume", metadata)]
+    assert calls == ["claim", "gemini", "pdf", "upload", ("metadata", metadata), ("consume", metadata)]
 
 
 @pytest.mark.parametrize(
@@ -321,6 +334,11 @@ def test_regular_generation_non_production_missing_bucket_preserves_fallback_con
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("fallback") or None)
     monkeypatch.setattr(
         app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append(("metadata", pdf_metadata)) or True,
+    )
+    monkeypatch.setattr(
+        app,
         "consume_purchase",
         lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True,
     )
@@ -328,7 +346,7 @@ def test_regular_generation_non_production_missing_bucket_preserves_fallback_con
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
 
     assert completed == ({"miko_intro": "result"}, b"pdf", None)
-    assert calls == ["claim", "gemini", "pdf", "fallback", ("consume", None)]
+    assert calls == ["claim", "gemini", "pdf", "fallback", ("metadata", None), ("consume", None)]
 
 
 def test_regular_generation_releases_claim_and_does_not_consume_when_upload_fails(monkeypatch):
@@ -408,19 +426,127 @@ def test_consume_failure_leaves_purchase_unused_and_does_not_reuse_orphan_object
     metadata = {
         "pdf_status": "ready",
         "pdf_object_path": "pdf-recovery/p_123/orphan.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
+        "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
         "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
     }
     monkeypatch.setattr(app, "claim_purchase_generation", lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED)
     monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
     monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append(("upload", metadata["pdf_object_path"])) or metadata)
+    monkeypatch.setattr(
+        app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append(("metadata", pdf_metadata)) or True,
+    )
     monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or False)
     monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release") or True)
 
     completed = app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger())
 
     assert completed is None
-    assert calls == ["claim", "gemini", "pdf", ("upload", "pdf-recovery/p_123/orphan.pdf"), ("consume", metadata), "release"]
+    assert calls == [
+        "claim",
+        "gemini",
+        "pdf",
+        ("upload", "pdf-recovery/p_123/orphan.pdf"),
+        ("metadata", metadata),
+        ("consume", metadata),
+    ]
+
+
+def test_regular_generation_persists_metadata_before_consume(monkeypatch):
+    calls = []
+    payload = SimpleNamespace(user_name="テストユーザー")
+    metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_123/artifact.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
+        "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
+        "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
+    }
+    monkeypatch.setattr(app, "claim_purchase_generation", lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED)
+    monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release") or True)
+    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
+    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
+    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True)
+    monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append("consume") or True)
+
+    assert app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger()) == (
+        {"miko_intro": "result"},
+        b"pdf",
+        metadata,
+    )
+    assert calls == ["claim", "gemini", "pdf", "upload", "metadata", "consume"]
+
+
+def test_regular_generation_stops_after_preconsume_metadata_failure(monkeypatch):
+    calls = []
+    payload = SimpleNamespace(user_name="テストユーザー")
+    metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_123/artifact.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
+        "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
+        "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
+    }
+    monkeypatch.setattr(app, "claim_purchase_generation", lambda purchase_id, logger: calls.append("claim") or app.GENERATION_CLAIMED)
+    monkeypatch.setattr(app, "release_purchase_generation_claim", lambda purchase_id, logger: calls.append("release") or True)
+    monkeypatch.setattr(app, "call_gemini_fortune", lambda value: calls.append("gemini") or {"miko_intro": "result"})
+    monkeypatch.setattr(app, "generate_miko_letter_pdf", lambda user_name, value: calls.append("pdf") or b"pdf")
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
+    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or False)
+    monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
+
+    assert app.generate_regular_fortune_pdf_and_consume(payload, "p_123", RecordingLogger()) is None
+    assert calls == ["claim", "gemini", "pdf", "upload", "metadata", "release"]
+
+
+def test_interrupted_ready_purchase_finalizes_with_consume_only(monkeypatch):
+    calls = []
+    streamlit_stub = make_streamlit_stub(access_token="token")
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    record = make_recovery_purchase(
+        used_flag=False,
+        generation_processing=True,
+        pdf_generated_at=datetime.datetime.now(datetime.timezone.utc),
+    )
+    monkeypatch.setattr(
+        app,
+        "can_finalize_interrupted_pdf_generation",
+        lambda active_purchase, access_token: calls.append(("check", access_token)) or True,
+    )
+    monkeypatch.setattr(
+        app,
+        "consume_purchase",
+        lambda purchase_id, logger, **kwargs: calls.append(("consume", kwargs)) or True,
+    )
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: dict(record, used_flag=True, generation_processing=False))
+
+    finalized = app.finalize_interrupted_pdf_generation_if_ready(record, RecordingLogger())
+
+    assert finalized["used_flag"] is True
+    assert finalized["generation_processing"] is False
+    assert calls == [
+        ("check", "token"),
+        (
+            "consume",
+            {
+                "require_ready_pdf_metadata": True,
+                "require_generation_processing": True,
+                "expected_pdf_metadata": {
+                    "pdf_object_path": record["pdf_object_path"],
+                    "pdf_expires_at": record["pdf_expires_at"],
+                    "pdf_sha256": record["pdf_sha256"],
+                    "pdf_artifact_version": record["pdf_artifact_version"],
+                },
+            },
+        ),
+    ]
 
 
 def test_recovery_download_works_from_url_token_and_empty_pdf_session(monkeypatch):
@@ -535,6 +661,14 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
     calls = []
     review_context = {"review_context": {"current_inputs": {}}}
     review_fortune = {"intro": "result"}
+    metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_review/artifact.pdf",
+        "pdf_generated_at": datetime.datetime.now(datetime.timezone.utc),
+        "pdf_expires_at": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
+        "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
+    }
     monkeypatch.setattr(app, "APP_ENV", "production")
     monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
     monkeypatch.setattr(
@@ -551,7 +685,12 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
     monkeypatch.setattr(app, "build_review_context", lambda **kwargs: calls.append("context") or review_context)
     monkeypatch.setattr(app, "call_gemini_review_fortune", lambda **kwargs: calls.append("fortune") or {"fortune_success": True, "review_fortune": review_fortune})
     monkeypatch.setattr(app, "generate_review_fortune_pdf", lambda **kwargs: calls.append("pdf") or b"review-pdf")
-    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or {"pdf_status": "ready"})
+    monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
+    monkeypatch.setattr(
+        app,
+        "persist_pdf_recovery_metadata_before_consume",
+        lambda purchase_id, pdf_metadata, logger: calls.append(("metadata", pdf_metadata)) or True,
+    )
     monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append(("consume", pdf_metadata)) or True)
 
     completed = app.generate_review_fortune_pdf_and_consume(
@@ -572,7 +711,8 @@ def test_review_generation_uploads_before_consuming_when_recovery_enabled(monkey
         "fortune",
         "pdf",
         "upload",
-        ("consume", {"pdf_status": "ready"}),
+        ("metadata", metadata),
+        ("consume", metadata),
     ]
 
 
