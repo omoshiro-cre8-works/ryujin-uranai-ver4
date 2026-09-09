@@ -47,6 +47,7 @@ class StreamlitStub:
         self.uploaded_pdf = uploaded_pdf
         self.click_submit = click_submit
         self.errors = []
+        self.infos = []
         self.images = []
         self.warnings = []
         self.buttons = []
@@ -56,11 +57,13 @@ class StreamlitStub:
             fortune_json=None,
             fortune_pdf_bytes=None,
             fortune_pdf_purchase_id=None,
+            fortune_pdf_recovery_metadata=None,
             review_context=None,
             review_fortune=None,
             review_fortune_purchase_id=None,
             review_pdf_bytes=None,
             review_pdf_generated_purchase_id=None,
+            review_pdf_recovery_metadata=None,
             review_purchase_consumed=set(),
         )
 
@@ -112,6 +115,10 @@ class StreamlitStub:
 
     def success(self, *args, **kwargs):
         self.session_state.setdefault("success_calls", []).append(args[0] if args else "")
+        return None
+
+    def info(self, *args, **kwargs):
+        self.infos.append(args[0] if args else "")
         return None
 
     def image(self, *args, **kwargs):
@@ -264,7 +271,7 @@ def test_regular_cached_heic_image_survives_submit_rerun(monkeypatch):
     monkeypatch.setattr(
         app,
         "generate_regular_fortune_pdf_and_consume",
-        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf"))[1],
+        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf", None))[1],
     )
 
     app.render_fortune_form(
@@ -291,7 +298,7 @@ def test_regular_cached_png_image_survives_submit_rerun(monkeypatch):
     monkeypatch.setattr(
         app,
         "generate_regular_fortune_pdf_and_consume",
-        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf"))[1],
+        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf", None))[1],
     )
 
     app.render_fortune_form(
@@ -318,7 +325,7 @@ def test_regular_cached_image_is_not_reused_for_other_purchase(monkeypatch):
     monkeypatch.setattr(
         app,
         "generate_regular_fortune_pdf_and_consume",
-        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf"))[1],
+        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf", None))[1],
     )
 
     app.render_fortune_form(
@@ -345,7 +352,7 @@ def test_regular_removed_image_cache_is_not_reused(monkeypatch):
     monkeypatch.setattr(
         app,
         "generate_regular_fortune_pdf_and_consume",
-        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf"))[1],
+        lambda payload, *args, **kwargs: (captured.setdefault("image_count", payload.image_count), ({"miko_intro": "result"}, b"pdf", None))[1],
     )
 
     app.render_fortune_form(
@@ -502,6 +509,60 @@ def test_review_production_missing_bucket_stops_before_pdf_validation_gemini_and
         call[0] == "error" and call[1][0] == "pdf_recovery_configuration_missing"
         for call in logger.calls
     )
+
+
+def ready_pdf_recovery_metadata():
+    return {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_test/artifact.pdf",
+        "pdf_expires_at": app.datetime.datetime.now(app.datetime.timezone.utc) + app.datetime.timedelta(days=7),
+        "pdf_sha256": app.sha256_pdf(b"pdf"),
+        "pdf_artifact_version": "v1",
+    }
+
+
+def test_regular_completion_shows_pdf_recovery_notice_for_ready_metadata(monkeypatch):
+    calls = []
+    streamlit_stub = StreamlitStub([], click_submit=False)
+    patch_common(monkeypatch, streamlit_stub, calls)
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
+    monkeypatch.setattr(app, "render_html_box", lambda *args, **kwargs: None)
+    streamlit_stub.session_state.fortune_json = {"miko_intro": "result"}
+    streamlit_stub.session_state.fortune_pdf_bytes = b"pdf"
+    streamlit_stub.session_state.fortune_pdf_purchase_id = "p_test"
+    streamlit_stub.session_state.fortune_pdf_recovery_metadata = ready_pdf_recovery_metadata()
+    streamlit_stub.session_state.user_name = "山田 太郎"
+
+    app.render_fortune_form(
+        {"purchase_id": "p_test", "payment_status": "paid", "used_flag": False},
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+    )
+
+    assert any("決済完了から7日間" in message for message in streamlit_stub.infos)
+    assert any("このページから再ダウンロードできます" in message for message in streamlit_stub.infos)
+    assert any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
+
+
+def test_review_completion_shows_pdf_recovery_notice_for_ready_metadata(monkeypatch):
+    calls = []
+    streamlit_stub = StreamlitStub([], uploaded_pdf=uploaded_pdf(), click_submit=False)
+    patch_common(monkeypatch, streamlit_stub, calls)
+    monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
+    monkeypatch.setattr(app, "render_html_box", lambda *args, **kwargs: None)
+    streamlit_stub.session_state.review_fortune = {"intro": "result"}
+    streamlit_stub.session_state.review_fortune_purchase_id = "p_review"
+    streamlit_stub.session_state.review_pdf_bytes = b"pdf"
+    streamlit_stub.session_state.review_pdf_generated_purchase_id = "p_review"
+    streamlit_stub.session_state.review_pdf_recovery_metadata = ready_pdf_recovery_metadata()
+
+    app.render_review_fortune_form(
+        {"purchase_id": "p_review", "payment_status": "paid", "used_flag": False, "product_type": app.PRODUCT_TYPE_REVIEW},
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+    )
+
+    assert any("決済完了から7日間" in message for message in streamlit_stub.infos)
+    assert any("このページから再ダウンロードできます" in message for message in streamlit_stub.infos)
+    assert any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
 
 
 def test_regular_too_many_files_does_not_normalize(monkeypatch):
