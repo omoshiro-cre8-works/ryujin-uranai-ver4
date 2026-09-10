@@ -56,6 +56,7 @@ from services.firestore_service import (
     get_firestore_client,
     get_purchase_collection,
     get_purchase_by_access_token,
+    get_self_resume_expires_at,
     is_ga4_event_sent,
     mark_ga4_event_sent_if_unset,
     release_generation_claim_transaction,
@@ -349,6 +350,10 @@ def init_session_state() -> None:
         st.session_state.active_purchase_id = None
     if "active_access_token" not in st.session_state:
         st.session_state.active_access_token = None
+    if "self_resume_url" not in st.session_state:
+        st.session_state.self_resume_url = None
+    if "self_resume_purchase_id" not in st.session_state:
+        st.session_state.self_resume_purchase_id = None
     if "checkout_url" not in st.session_state:
         st.session_state.checkout_url = None
     if "checkout_product_type" not in st.session_state:
@@ -808,6 +813,16 @@ def build_checkout_success_url(purchase_id: str, access_token: str, product_type
     ]
     return f"{APP_BASE_URL}/?{'&'.join(query_parts)}"
 
+
+def build_self_resume_url(purchase_id: str, access_token: str, product_type: str) -> str:
+    query_params = {
+        "purchase_id": purchase_id,
+        "access_token": access_token,
+        "product_type": normalize_product_type(product_type),
+        "action": "resume",
+    }
+    return f"{APP_BASE_URL}/?{urllib.parse.urlencode(query_params)}"
+
 def track_ga4_event(
     event_name: str,
     logger: logging.Logger,
@@ -1146,12 +1161,20 @@ def is_token_valid(record: dict[str, Any] | None) -> bool:
     return expires_at > utc_now()
 
 
+def is_self_resume_window_active(record: dict[str, Any] | None) -> bool:
+    expires_at = get_self_resume_expires_at(record)
+    if not expires_at:
+        return False
+    return utc_now() <= expires_at
+
+
 def is_purchase_ready(record: dict[str, Any] | None) -> bool:
     return bool(
         record
         and record.get("payment_status") == "paid"
         and not record.get("used_flag")
-        and is_token_valid(record)
+        and record.get("generation_processing") is not True
+        and is_self_resume_window_active(record)
     )
 
 
@@ -1752,6 +1775,12 @@ def get_current_purchase_record() -> dict[str, Any] | None:
                     and token_record.get("purchase_id") == synced_record.get("purchase_id")
                 ):
                     st.session_state.active_access_token = access_token
+                    st.session_state.self_resume_url = build_self_resume_url(
+                        str(synced_record.get("purchase_id") or ""),
+                        access_token,
+                        get_purchase_product_type(synced_record),
+                    )
+                    st.session_state.self_resume_purchase_id = synced_record.get("purchase_id")
             should_clean_purchase_query = bool(access_token or purchase_id or get_query_param_value("product_type"))
             if should_clean_purchase_query:
                 st.session_state.active_purchase_id = synced_record.get("purchase_id")
@@ -1762,15 +1791,26 @@ def get_current_purchase_record() -> dict[str, Any] | None:
         if token_record and (not purchase_id or str(token_record.get("purchase_id") or "") == purchase_id):
             st.session_state.active_purchase_id = token_record.get("purchase_id")
             st.session_state.active_access_token = access_token
+            st.session_state.self_resume_url = build_self_resume_url(
+                str(token_record.get("purchase_id") or ""),
+                access_token,
+                get_purchase_product_type(token_record),
+            )
+            st.session_state.self_resume_purchase_id = token_record.get("purchase_id")
             clean_purchase_query_params()
             return token_record
+        st.session_state.active_purchase_id = None
+        st.session_state.active_access_token = None
+        st.session_state.self_resume_url = None
+        st.session_state.self_resume_purchase_id = None
+        clean_purchase_query_params()
+        return None
     active_purchase_id = st.session_state.get("active_purchase_id")
     return get_purchase_record(active_purchase_id)
 
 
 def clean_purchase_query_params() -> None:
-    # Keep purchase_id/access_token/product_type so a paid, unused purchase can be restored after reloads.
-    removable_keys = {"session_id"}
+    removable_keys = {"session_id", "purchase_id", "access_token", "product_type", "action"}
     remaining_params: dict[str, str] = {}
     for key in st.query_params:
         if key in removable_keys:
@@ -1781,6 +1821,44 @@ def clean_purchase_query_params() -> None:
     st.query_params.clear()
     for key, value in remaining_params.items():
         st.query_params[key] = value
+
+
+def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
+    purchase_id = str(active_purchase.get("purchase_id") or "")
+    if not purchase_id:
+        return
+    resume_url = st.session_state.get("self_resume_url")
+    if st.session_state.get("self_resume_purchase_id") != purchase_id:
+        resume_url = None
+    if not resume_url:
+        return
+
+    expires_at = get_self_resume_expires_at(active_purchase)
+    expires_text = ""
+    if expires_at:
+        expires_jst = expires_at.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
+        expires_text = (
+            f"{expires_jst.year}年{expires_jst.month}月{expires_jst.day}日 "
+            f"{expires_jst.hour:02d}:{expires_jst.minute:02d}"
+        )
+
+    st.info(
+        "この鑑定は、決済完了から7日間、この再開URLから続きができます。\n\n"
+        "途中で画面を閉じる可能性がある場合は、下の再開URLをコピーして安全な場所へ保存してください。\n\n"
+        "このURLは購入者専用です。第三者へ共有しないでください。"
+        + (f"\n\n再開期限：{expires_text}ごろ" if expires_text else "")
+    )
+    st.caption("再開URL")
+    st.code(str(resume_url), language=None)
+
+
+def render_generation_processing_screen(active_purchase: dict[str, Any]) -> None:
+    render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
+    st.info(
+        "お告げPDFを準備しています。しばらく待ってから、このページを再読み込みしてください。\n\n"
+        "同じ購入で処理中のため、新しい鑑定生成は開始しません。"
+    )
+    render_self_resume_notice(active_purchase)
 
 
 def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
@@ -3247,8 +3325,13 @@ def main() -> None:
         st.stop()
 
     if active_purchase:
+        if active_purchase.get("payment_status") == "paid" and active_purchase.get("generation_processing") is True:
+            render_generation_processing_screen(active_purchase)
+            return
+
         if is_purchase_ready(active_purchase):
             render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
+            render_self_resume_notice(active_purchase)
             if get_purchase_product_type(active_purchase) == PRODUCT_TYPE_REVIEW:
                 render_review_fortune_form(active_purchase, logger)
             else:

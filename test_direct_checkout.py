@@ -1,3 +1,4 @@
+import urllib.parse
 from types import SimpleNamespace
 
 import app
@@ -12,6 +13,21 @@ def test_direct_checkout_rejects_invalid_or_purchase_return():
     assert not app.should_use_direct_checkout("checkout", "invalid", False)
     assert not app.should_use_direct_checkout("checkout", "review", True)
     assert not app.should_use_direct_checkout("other", "review", False)
+
+
+def test_build_self_resume_url_marks_resume_action(monkeypatch):
+    monkeypatch.setattr(app, "APP_BASE_URL", "https://app.example")
+
+    resume_url = app.build_self_resume_url("p_1", "secret-token", "review")
+    parsed = urllib.parse.urlparse(resume_url)
+    params = urllib.parse.parse_qs(parsed.query)
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "app.example"
+    assert params["purchase_id"] == ["p_1"]
+    assert params["access_token"] == ["secret-token"]
+    assert params["product_type"] == ["review"]
+    assert params["action"] == ["resume"]
 
 
 def test_review_stripe_readiness_does_not_require_regular_price(monkeypatch):

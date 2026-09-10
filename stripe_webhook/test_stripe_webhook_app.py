@@ -1,3 +1,4 @@
+import datetime
 import logging
 import sys
 import types
@@ -140,6 +141,7 @@ def test_paid_session_with_matching_record_is_marked_paid(monkeypatch) -> None:
     assert len(updates) == 1
     assert updates[0][0] == "p_1"
     assert updates[0][1]["payment_status"] == "paid"
+    assert updates[0][1]["token_expires_at"] == updates[0][1]["checkout_completed_at"] + datetime.timedelta(days=7)
     assert "entry_lp" not in updates[0][1]
     assert "entry_utm_source" not in updates[0][1]
     assert "current_lp" not in updates[0][1]
