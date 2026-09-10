@@ -1844,7 +1844,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
 
     st.info(
         "この鑑定は、決済完了から7日間、この再開URLから続きができます。\n\n"
-        "途中で画面を閉じる可能性がある場合は、このURLをコピーまたはブックマークしてください。\n\n"
+        "途中で画面を閉じる可能性がある場合は、下の再開URLをコピーして安全な場所へ保存してください。\n\n"
         "このURLは購入者専用です。第三者へ共有しないでください。"
         + (f"\n\n再開期限：{expires_text}ごろ" if expires_text else "")
     )
