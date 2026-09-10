@@ -148,6 +148,7 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
         logger.warning("stripe_price_type_mismatch", extra={"purchase_id": purchase_id})
         return False
 
+    completed_at = utc_now()
     update_purchase_record(
         purchase_id,
         payment_status="paid",
@@ -159,8 +160,9 @@ def mark_purchase_paid_from_session(session: dict[str, Any], event_id: str | Non
         amount_jpy=amount_total,
         amount_total=amount_total,
         currency=currency,
-        checkout_completed_at=utc_now(),
-        webhook_confirmed_at=utc_now(),
+        checkout_completed_at=completed_at,
+        token_expires_at=completed_at + datetime.timedelta(days=7),
+        webhook_confirmed_at=completed_at,
     )
 
     logger.info(

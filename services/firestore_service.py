@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from google.cloud import firestore
@@ -36,11 +36,36 @@ PDF_CONSUME_ONLY_MATCH_FIELDS = (
     "pdf_sha256",
     "pdf_artifact_version",
 )
+SELF_RESUME_DAYS = 7
 
 
 def _now_utc() -> datetime:
     """UTC の現在時刻を返す。"""
     return datetime.now(timezone.utc)
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def get_self_resume_expires_at(purchase: Dict[str, Any] | None) -> datetime | None:
+    if not purchase:
+        return None
+    checkout_completed_at = _as_utc_datetime(purchase.get("checkout_completed_at"))
+    if checkout_completed_at:
+        return checkout_completed_at + timedelta(days=SELF_RESUME_DAYS)
+    return _as_utc_datetime(purchase.get("token_expires_at"))
 
 
 def get_firestore_client() -> firestore.Client:
@@ -228,44 +253,58 @@ def _access_token_matches(purchase: Dict[str, Any], access_token: str) -> bool:
 
 
 def _purchase_token_is_active(purchase: Dict[str, Any]) -> bool:
-    expires_at = purchase.get("token_expires_at")
+    expires_at = _as_utc_datetime(purchase.get("token_expires_at"))
     if not expires_at:
         return False
-    if getattr(expires_at, "tzinfo", None) is None:
-        try:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        except Exception:
-            return False
-
-    now = _now_utc()
     try:
-        return expires_at > now
+        return expires_at > _now_utc()
     except TypeError:
         return False
 
 
-def _purchase_can_be_used(purchase: Dict[str, Any], access_token: str) -> bool:
+def _purchase_self_resume_is_active(purchase: Dict[str, Any]) -> bool:
+    expires_at = get_self_resume_expires_at(purchase)
+    if not expires_at:
+        return False
+    try:
+        return _now_utc() <= expires_at
+    except TypeError:
+        return False
+
+
+def _generation_started_within_self_resume_window(purchase: Dict[str, Any]) -> bool:
+    started_at = _as_utc_datetime(purchase.get("generation_processing_started_at"))
+    expires_at = get_self_resume_expires_at(purchase)
+    if not started_at or not expires_at:
+        return False
+    try:
+        return started_at <= expires_at
+    except TypeError:
+        return False
+
+
+def _purchase_can_finish_started_generation(purchase: Dict[str, Any]) -> bool:
+    return bool(
+        purchase.get("generation_processing") is True
+        and _generation_started_within_self_resume_window(purchase)
+    )
+
+
+def _purchase_can_start_generation(purchase: Dict[str, Any], access_token: str) -> bool:
     return bool(
         purchase.get("payment_status") == "paid"
         and purchase.get("used_flag") is False
         and _access_token_matches(purchase, access_token)
-        and _purchase_token_is_active(purchase)
+        and _purchase_self_resume_is_active(purchase)
     )
 
 
 def _datetime_is_future(value: Any, now: datetime | None = None) -> bool:
     if not value:
         return False
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError:
-            return False
-    if getattr(value, "tzinfo", None) is None:
-        try:
-            value = value.replace(tzinfo=timezone.utc)
-        except Exception:
-            return False
+    value = _as_utc_datetime(value)
+    if not value:
+        return False
 
     try:
         return value > (now or _now_utc())
@@ -358,7 +397,7 @@ def can_finalize_interrupted_pdf_generation(
         and purchase.get("generation_processing") is True
         and _has_ready_pdf_metadata(purchase, now=now)
         and _access_token_matches(purchase, access_token)
-        and _purchase_token_is_active(purchase)
+        and _generation_started_within_self_resume_window(purchase)
     )
 
 
@@ -395,7 +434,7 @@ def save_pdf_recovery_metadata_transaction(
             return False
         if not _access_token_matches(purchase, access_token):
             return False
-        if not _purchase_token_is_active(purchase):
+        if not _generation_started_within_self_resume_window(purchase):
             return False
         if not _pdf_metadata_matches_existing(purchase, pdf_metadata):
             return False
@@ -429,7 +468,7 @@ def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
             return GENERATION_CLAIM_NOT_READY
 
         purchase = snapshot.to_dict() or {}
-        if not _purchase_can_be_used(purchase, access_token):
+        if not _purchase_can_start_generation(purchase, access_token):
             return GENERATION_CLAIM_NOT_READY
         if purchase.get("generation_processing") is True:
             return GENERATION_CLAIM_PROCESSING
@@ -519,9 +558,12 @@ def consume_purchase_transaction(
             return False
         if not _access_token_matches(purchase, access_token):
             return False
-        if not _purchase_token_is_active(purchase):
-            return False
         if require_generation_processing and purchase.get("generation_processing") is not True:
+            return False
+        if require_generation_processing:
+            if not _generation_started_within_self_resume_window(purchase):
+                return False
+        elif not _purchase_token_is_active(purchase) and not _purchase_can_finish_started_generation(purchase):
             return False
         if require_ready_pdf_metadata and not _has_ready_pdf_metadata(purchase):
             return False

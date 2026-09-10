@@ -196,6 +196,8 @@ def _consume_record(**updates):
         "access_token_hash": firestore_service.hash_access_token(token),
     }
     record.update(updates)
+    if record.get("generation_processing") is True and "generation_processing_started_at" not in record:
+        record["generation_processing_started_at"] = datetime.now(timezone.utc)
     return token, record
 
 
@@ -309,6 +311,40 @@ def test_claim_generation_transaction_rejects_processing_record(monkeypatch):
     status, client = _run_claim(monkeypatch, record, token)
 
     assert status == firestore_service.GENERATION_CLAIM_PROCESSING
+    assert client.transaction_ref.updates == []
+
+
+def test_claim_generation_transaction_allows_until_self_resume_deadline(monkeypatch):
+    token, record = _consume_record(
+        checkout_completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        token_expires_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        firestore_service,
+        "_now_utc",
+        lambda: datetime(2026, 1, 8, tzinfo=timezone.utc),
+    )
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIMED
+    assert len(client.transaction_ref.updates) == 1
+
+
+def test_claim_generation_transaction_rejects_after_self_resume_deadline(monkeypatch):
+    token, record = _consume_record(
+        checkout_completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        token_expires_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        firestore_service,
+        "_now_utc",
+        lambda: datetime(2026, 1, 8, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    status, client = _run_claim(monkeypatch, record, token)
+
+    assert status == firestore_service.GENERATION_CLAIM_NOT_READY
     assert client.transaction_ref.updates == []
 
 
@@ -534,6 +570,48 @@ def test_consume_only_recovery_revalidates_ready_metadata_in_transaction(monkeyp
     assert updates["generation_processing"] is False
 
 
+def test_consume_only_recovery_allows_deadline_crossing_when_claim_started_in_time(monkeypatch):
+    metadata = _pdf_metadata(pdf_expires_at=datetime(2026, 1, 10, tzinfo=timezone.utc))
+    token, record = _consume_record(
+        checkout_completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        token_expires_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+        generation_processing=True,
+        generation_processing_started_at=datetime(2026, 1, 7, 23, 59, tzinfo=timezone.utc),
+        **metadata,
+    )
+    monkeypatch.setattr(
+        firestore_service,
+        "_now_utc",
+        lambda: datetime(2026, 1, 8, 0, 1, tzinfo=timezone.utc),
+    )
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is True
+    assert client.transaction_ref.updates[0][1]["used_flag"] is True
+
+
+def test_consume_only_recovery_rejects_when_claim_started_after_deadline(monkeypatch):
+    metadata = _pdf_metadata(pdf_expires_at=datetime(2026, 1, 10, tzinfo=timezone.utc))
+    token, record = _consume_record(
+        checkout_completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        token_expires_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+        generation_processing=True,
+        generation_processing_started_at=datetime(2026, 1, 8, 0, 0, 1, tzinfo=timezone.utc),
+        **metadata,
+    )
+    monkeypatch.setattr(
+        firestore_service,
+        "_now_utc",
+        lambda: datetime(2026, 1, 8, 0, 1, tzinfo=timezone.utc),
+    )
+
+    consumed, client = _run_consume_only_recovery(monkeypatch, record, token, metadata)
+
+    assert consumed is False
+    assert client.transaction_ref.updates == []
+
+
 def test_consume_only_recovery_rejects_if_processing_changed_after_precheck(monkeypatch):
     metadata = _pdf_metadata()
     token, record = _consume_record(generation_processing=False, **metadata)
@@ -613,6 +691,19 @@ def test_can_finalize_interrupted_pdf_generation_allows_processing_ready_metadat
     assert firestore_service.can_finalize_interrupted_pdf_generation(record, token) is True
 
 
+def test_can_finalize_interrupted_pdf_generation_allows_expired_token_after_in_time_claim():
+    metadata = _pdf_metadata(pdf_expires_at=datetime.now(timezone.utc) + timedelta(days=1))
+    token, record = _consume_record(
+        checkout_completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        token_expires_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+        generation_processing=True,
+        generation_processing_started_at=datetime(2026, 1, 7, 23, 59, tzinfo=timezone.utc),
+        **metadata,
+    )
+
+    assert firestore_service.can_finalize_interrupted_pdf_generation(record, token) is True
+
+
 @pytest.mark.parametrize(
     "record_update",
     [
@@ -623,6 +714,11 @@ def test_can_finalize_interrupted_pdf_generation_allows_processing_ready_metadat
         {"pdf_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
         {"used_flag": True},
         {"generation_processing": False},
+        {"generation_processing_started_at": None},
+        {
+            "checkout_completed_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "generation_processing_started_at": datetime(2026, 1, 8, 0, 0, 1, tzinfo=timezone.utc),
+        },
     ],
 )
 def test_can_finalize_interrupted_pdf_generation_rejects_unsafe_records(record_update):
