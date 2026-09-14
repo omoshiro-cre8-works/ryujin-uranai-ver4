@@ -347,9 +347,37 @@ export default function({ data, setStateValue }) {
 }
 """
 
+CANONICAL_ORIGIN_BRIDGE_JS = """
+export default function({ data, setStateValue }) {
+  const payload = data || {};
+
+  function emit(status, extra = {}) {
+    setStateValue("payload", { status, ...extra });
+  }
+
+  try {
+    const canonicalOrigin = new URL(String(payload.canonical_origin || "")).origin;
+    if (window.location.origin === canonicalOrigin) {
+      emit("canonical");
+      return;
+    }
+
+    const targetUrl = `${canonicalOrigin}${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.replace(targetUrl);
+    emit("redirecting");
+  } catch (error) {
+    emit("error", { reason: "invalid_canonical_origin" });
+  }
+}
+"""
+
 token_bridge_component = st.components.v2.component(
     "ryujin_token_bridge",
     js=TOKEN_BRIDGE_JS,
+)
+canonical_origin_component = st.components.v2.component(
+    "ryujin_canonical_origin_bridge",
+    js=CANONICAL_ORIGIN_BRIDGE_JS,
 )
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
@@ -1163,9 +1191,41 @@ def mark_purchase_token_auth_failed() -> None:
     st.session_state["purchase_token_auth_failed"] = True
 
 
-def get_token_bridge_payload(result: Any) -> dict[str, Any]:
+def get_canonical_origin(app_base_url: str | None = None) -> str | None:
+    parsed = urllib.parse.urlparse((app_base_url or APP_BASE_URL).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def get_component_payload(result: Any) -> dict[str, Any]:
     payload = getattr(result, "payload", None)
     return payload if isinstance(payload, dict) else {}
+
+
+def ensure_canonical_origin() -> str:
+    canonical_origin = get_canonical_origin()
+    if not canonical_origin:
+        st.session_state["canonical_origin_status"] = "error"
+        return "error"
+
+    result = canonical_origin_component(
+        data={"canonical_origin": canonical_origin},
+        default={"payload": {"status": "pending"}},
+        key="canonical_origin_bridge",
+        on_payload_change=lambda: None,
+        height=0,
+    )
+    payload = get_component_payload(result)
+    status = str(payload.get("status") or "pending")
+    if status not in {"canonical", "redirecting", "pending", "error"}:
+        status = "pending"
+    st.session_state["canonical_origin_status"] = status
+    return status
+
+
+def get_token_bridge_payload(result: Any) -> dict[str, Any]:
+    return get_component_payload(result)
 
 
 def mount_token_bridge(
@@ -3680,6 +3740,15 @@ def main() -> None:
     st.set_page_config(page_title=f"🐉 {APP_TITLE}", layout="centered")
     render_app_css()
     init_session_state()
+
+    canonical_status = ensure_canonical_origin()
+    if canonical_status != "canonical":
+        if canonical_status == "error":
+            st.error("ページを準備できませんでした。時間をおいてもう一度お試しください。")
+        else:
+            st.info("ページを準備しています。数秒お待ちください。")
+        return
+
     update_ga4_identifiers_from_query()
     update_tracking_session_state_from_query()
 
