@@ -539,8 +539,9 @@ def test_regular_completion_shows_pdf_recovery_notice_for_ready_metadata(monkeyp
     )
 
     assert any("決済完了から7日間" in message for message in streamlit_stub.infos)
+    assert any("鑑定結果のPDFは" in message for message in streamlit_stub.infos)
     assert any("このページから再ダウンロードできます" in message for message in streamlit_stub.infos)
-    assert any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
+    assert not any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
 
 
 def test_review_completion_shows_pdf_recovery_notice_for_ready_metadata(monkeypatch):
@@ -561,8 +562,9 @@ def test_review_completion_shows_pdf_recovery_notice_for_ready_metadata(monkeypa
     )
 
     assert any("決済完了から7日間" in message for message in streamlit_stub.infos)
+    assert any("鑑定結果のPDFは" in message for message in streamlit_stub.infos)
     assert any("このページから再ダウンロードできます" in message for message in streamlit_stub.infos)
-    assert any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
+    assert not any("このページのURLは第三者と共有しないでください" in message for message in streamlit_stub.infos)
 
 
 def test_regular_too_many_files_does_not_normalize(monkeypatch):

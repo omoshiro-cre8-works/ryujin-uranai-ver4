@@ -2742,9 +2742,8 @@ def render_completion_screen(product_type: str | None = None) -> None:
 
 
 PDF_RECOVERY_COMPLETION_NOTICE = (
-    "生成されたPDFは、決済完了から7日間、このページから再ダウンロードできます。\n\n"
-    "再取得期限を過ぎるとダウンロードできなくなります。\n\n"
-    "このページのURLは第三者と共有しないでください。"
+    "鑑定結果のPDFは、決済完了から7日間、このページから再ダウンロードできます。\n\n"
+    "再取得期限を過ぎるとダウンロードできなくなります。"
 )
 
 
