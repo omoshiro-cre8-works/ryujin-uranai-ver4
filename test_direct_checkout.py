@@ -202,6 +202,59 @@ def test_token_bridge_js_avoids_console_and_cleans_fragment():
     assert "sessionStorage.removeItem" in app.TOKEN_BRIDGE_JS
 
 
+def test_get_canonical_origin_extracts_origin(monkeypatch):
+    assert app.get_canonical_origin("https://app.example/path?x=1") == "https://app.example"
+    assert app.get_canonical_origin("https://app.example/") == "https://app.example"
+
+
+def test_get_canonical_origin_rejects_invalid_base_url():
+    assert app.get_canonical_origin("not-a-url") is None
+    assert app.get_canonical_origin("ftp://app.example") is None
+
+
+def test_canonical_origin_bridge_js_redirects_without_logging_or_storage():
+    assert "new URL" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "window.location.origin" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "window.location.pathname" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "window.location.search" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "window.location.hash" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "window.location.replace" in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "console.log" not in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "sessionStorage" not in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "localStorage" not in app.CANONICAL_ORIGIN_BRIDGE_JS
+    assert "access_token" not in app.CANONICAL_ORIGIN_BRIDGE_JS
+
+
+def test_ensure_canonical_origin_returns_canonical(monkeypatch):
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.session_state = AttrDict()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "APP_BASE_URL", "https://app.example/path")
+    monkeypatch.setattr(
+        app,
+        "canonical_origin_component",
+        lambda **kwargs: SimpleNamespace(payload={"status": "canonical"}),
+    )
+
+    assert app.ensure_canonical_origin() == "canonical"
+    assert streamlit_stub.session_state.canonical_origin_status == "canonical"
+
+
+def test_ensure_canonical_origin_invalid_base_url_stops_safely(monkeypatch):
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.session_state = AttrDict()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "APP_BASE_URL", "not-a-url")
+    monkeypatch.setattr(
+        app,
+        "canonical_origin_component",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not mount component")),
+    )
+
+    assert app.ensure_canonical_origin() == "error"
+    assert streamlit_stub.session_state.canonical_origin_status == "error"
+
+
 def test_regular_direct_checkout_uses_regular_product(monkeypatch):
     calls = []
     streamlit_stub = make_streamlit_stub()
@@ -299,6 +352,7 @@ def test_main_root_fallback_disables_checkout_creation(monkeypatch):
     monkeypatch.setattr(app, "configure_logging", lambda: None)
     monkeypatch.setattr(app, "render_app_css", lambda: None)
     monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "ensure_canonical_origin", lambda: "canonical")
     monkeypatch.setattr(app, "update_ga4_identifiers_from_query", lambda: None)
     monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
     monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
@@ -342,6 +396,7 @@ def test_main_direct_checkout_still_uses_direct_checkout(monkeypatch):
     monkeypatch.setattr(app, "configure_logging", lambda: None)
     monkeypatch.setattr(app, "render_app_css", lambda: None)
     monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "ensure_canonical_origin", lambda: "canonical")
     monkeypatch.setattr(app, "update_ga4_identifiers_from_query", lambda: None)
     monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
     monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
@@ -368,6 +423,58 @@ def test_main_direct_checkout_still_uses_direct_checkout(monkeypatch):
     app.main()
 
     assert calls == [("direct_checkout", app.PRODUCT_TYPE_REGULAR)]
+
+
+def test_main_canonicalization_pending_blocks_checkout_and_token_work(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(app, "configure_logging", lambda: None)
+    monkeypatch.setattr(app, "render_app_css", lambda: None)
+    monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "ensure_canonical_origin", lambda: "redirecting")
+    monkeypatch.setattr(
+        app,
+        "update_ga4_identifiers_from_query",
+        lambda: calls.append(("unexpected", "ga4")),
+    )
+    monkeypatch.setattr(
+        app,
+        "get_current_purchase_record",
+        lambda: calls.append(("unexpected", "purchase")) or None,
+    )
+    monkeypatch.setattr(
+        app,
+        "render_direct_checkout",
+        lambda *args, **kwargs: calls.append(("unexpected", "direct_checkout")),
+    )
+    monkeypatch.setattr(
+        app,
+        "create_checkout_session",
+        lambda *args, **kwargs: calls.append(("unexpected", "checkout_session")),
+    )
+    monkeypatch.setattr(
+        app,
+        "prepare_checkout_token_for_browser",
+        lambda *args, **kwargs: calls.append(("unexpected", "token_store")),
+    )
+    monkeypatch.setattr(
+        app,
+        "read_fragment_token_from_browser",
+        lambda *args, **kwargs: calls.append(("unexpected", "fragment_read")),
+    )
+    monkeypatch.setattr(
+        app,
+        "st",
+        SimpleNamespace(
+            set_page_config=lambda *args, **kwargs: None,
+            info=lambda value, **kwargs: calls.append(("info", value)),
+            session_state=AttrDict(),
+        ),
+    )
+
+    app.main()
+
+    assert calls == [("info", "ページを準備しています。数秒お待ちください。")]
 
 
 def test_cancel_return_root_does_not_create_checkout_session(monkeypatch):

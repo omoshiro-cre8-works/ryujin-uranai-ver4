@@ -58,6 +58,7 @@ def setup_main_route(monkeypatch, active_purchase):
     monkeypatch.setattr(app, "configure_logging", lambda: None)
     monkeypatch.setattr(app, "render_app_css", lambda: None)
     monkeypatch.setattr(app, "init_session_state", lambda: None)
+    monkeypatch.setattr(app, "ensure_canonical_origin", lambda: "canonical")
     monkeypatch.setattr(app, "update_ga4_identifiers_from_query", lambda: None)
     monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
     monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
