@@ -160,10 +160,11 @@ def test_pdf_recovery_completion_notice_shows_for_ready_recovery_purchase(monkey
     info_calls = [call for call in streamlit_stub.calls if call[0] == "info"]
     assert len(info_calls) == 1
     notice = info_calls[0][1]
+    assert "鑑定結果のPDFは" in notice
     assert "決済完了から7日間" in notice
     assert "このページから再ダウンロードできます" in notice
     assert "再取得期限を過ぎるとダウンロードできなくなります" in notice
-    assert "このページのURLは第三者と共有しないでください" in notice
+    assert "このページのURLは第三者と共有しないでください" not in notice
 
 
 @pytest.mark.parametrize(
