@@ -2146,14 +2146,78 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             f"{expires_jst.hour:02d}:{expires_jst.minute:02d}"
         )
 
-    st.info(
-        "この鑑定は、決済完了から7日間、この再開URLから続きができます。\n\n"
-        "途中で画面を閉じる可能性がある場合は、下の再開URLをコピーして安全な場所へ保存してください。\n\n"
-        "このURLは購入者専用です。第三者へ共有しないでください。"
-        + (f"\n\n再開期限：{expires_text}ごろ" if expires_text else "")
+    expires_html = (
+        f'<div class="self-resume-expiry">再開期限：{html.escape(expires_text)}ごろ</div>'
+        if expires_text
+        else ""
     )
-    st.caption("再開URL")
-    st.code(str(resume_url), language=None)
+    st.html(
+        f'''
+        <div class="self-resume-notice">
+            <div class="self-resume-title">途中で閉じても、7日間は続きから再開できます</div>
+            <div class="self-resume-body">
+                この鑑定は、決済完了から7日間、この再開URLから続きができます。<br>
+                途中で画面を閉じる場合に備えて、下の再開URLを保存しておいてください。<br>
+                この再開URLは、今回の鑑定を続けるための専用URLです。
+            </div>
+            {expires_html}
+            <div class="self-resume-link-label">再開用リンク</div>
+            <div class="self-resume-link">{html.escape(str(resume_url))}</div>
+        </div>
+        <style>
+        .self-resume-notice {{
+            margin: 0.7rem 0 1.15rem;
+            padding: 1.05rem 1.05rem 1rem;
+            border: 1px solid #eadfd8;
+            border-radius: 10px;
+            background: #fffaf7;
+        }}
+        .self-resume-title {{
+            color: #8a3d24;
+            font-size: 1.02rem;
+            font-weight: 700;
+            line-height: 1.65;
+            margin-bottom: 0.55rem;
+        }}
+        .self-resume-body {{
+            color: #333333;
+            font-size: 0.93rem;
+            font-weight: 500;
+            line-height: 1.85;
+        }}
+        .self-resume-expiry {{
+            color: #6f625d;
+            font-size: 0.84rem;
+            font-weight: 500;
+            line-height: 1.7;
+            margin-top: 0.7rem;
+        }}
+        .self-resume-link-label {{
+            color: #8a3d24;
+            font-size: 0.88rem;
+            font-weight: 700;
+            line-height: 1.6;
+            margin-top: 0.9rem;
+            margin-bottom: 0.3rem;
+        }}
+        .self-resume-link {{
+            color: #333333;
+            font-family: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", "YuMincho",
+                         "Noto Serif JP", "MS PMincho", Georgia, serif;
+            font-size: 0.86rem;
+            font-weight: 500;
+            line-height: 1.65;
+            overflow-wrap: anywhere;
+            word-break: break-all;
+            user-select: text;
+            background: #ffffff;
+            border: 1px solid #eadfd8;
+            border-radius: 8px;
+            padding: 0.75rem 0.8rem;
+        }}
+        </style>
+        '''
+    )
 
 
 def render_generation_processing_screen(active_purchase: dict[str, Any]) -> None:
