@@ -25,9 +25,11 @@ def test_build_self_resume_url_marks_resume_action(monkeypatch):
     assert parsed.scheme == "https"
     assert parsed.netloc == "app.example"
     assert params["purchase_id"] == ["p_1"]
-    assert params["access_token"] == ["secret-token"]
+    assert "access_token" not in params
     assert params["product_type"] == ["review"]
     assert params["action"] == ["resume"]
+    fragment_params = urllib.parse.parse_qs(parsed.fragment)
+    assert fragment_params["access_token"] == ["secret-token"]
 
 
 def test_review_stripe_readiness_does_not_require_regular_price(monkeypatch):
@@ -139,12 +141,65 @@ def test_review_checkout_price_uses_review_price_id(monkeypatch):
 
 def make_streamlit_stub():
     return SimpleNamespace(
-        session_state={"checkout_url": None, "checkout_product_type": None},
+        session_state=AttrDict({"checkout_url": None, "checkout_product_type": None}),
         markdown=lambda *args, **kwargs: None,
         info=lambda *args, **kwargs: None,
         error=lambda *args, **kwargs: None,
         caption=lambda *args, **kwargs: None,
     )
+
+
+def test_checkout_link_hidden_until_session_storage_saved(monkeypatch):
+    calls = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.session_state.active_purchase_id = "p_1"
+    streamlit_stub.session_state.active_access_token = "token_1"
+    streamlit_stub.info = lambda value, **kwargs: calls.append(("info", value))
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: None)
+    monkeypatch.setattr(app, "render_checkout_link", lambda *args, **kwargs: calls.append(("link", args)))
+
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+
+    assert any(call[0] == "info" for call in calls)
+    assert not any(call[0] == "link" for call in calls)
+
+
+def test_checkout_link_shown_after_session_storage_saved(monkeypatch):
+    calls = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.session_state.active_purchase_id = "p_1"
+    streamlit_stub.session_state.active_access_token = "token_1"
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: True)
+    monkeypatch.setattr(app, "render_checkout_link", lambda url, amount: calls.append(("link", url, amount)))
+
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+
+    assert calls == [("link", "https://checkout.example/session", 300)]
+
+
+def test_checkout_link_hidden_when_session_storage_fails(monkeypatch):
+    calls = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.session_state.active_purchase_id = "p_1"
+    streamlit_stub.session_state.active_access_token = "token_1"
+    streamlit_stub.error = lambda value, **kwargs: calls.append(("error", value))
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: False)
+    monkeypatch.setattr(app, "render_checkout_link", lambda *args, **kwargs: calls.append(("link", args)))
+
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+
+    assert any(call[0] == "error" for call in calls)
+    assert not any(call[0] == "link" for call in calls)
+
+
+def test_token_bridge_js_avoids_console_and_cleans_fragment():
+    assert "console.log" not in app.TOKEN_BRIDGE_JS
+    assert "localStorage" not in app.TOKEN_BRIDGE_JS
+    assert "history.replaceState" in app.TOKEN_BRIDGE_JS
+    assert "sessionStorage.removeItem" in app.TOKEN_BRIDGE_JS
 
 
 def test_regular_direct_checkout_uses_regular_product(monkeypatch):
@@ -166,7 +221,7 @@ def test_regular_direct_checkout_uses_regular_product(monkeypatch):
     )
     monkeypatch.setattr(
         app,
-        "render_checkout_link",
+        "render_checkout_link_when_token_stored",
         lambda url, amount: calls.append(("link", url, amount)),
     )
 
@@ -202,7 +257,7 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     )
     monkeypatch.setattr(
         app,
-        "render_checkout_link",
+        "render_checkout_link_when_token_stored",
         lambda url, amount: calls.append(("link", url, amount)),
     )
     monkeypatch.setattr(
@@ -340,7 +395,7 @@ def test_cancel_return_root_does_not_create_checkout_session(monkeypatch):
     )
     monkeypatch.setattr(
         app,
-        "render_checkout_link",
+        "render_checkout_link_when_token_stored",
         lambda *args, **kwargs: calls.append(("unexpected_link",)),
     )
 
@@ -663,10 +718,15 @@ def test_success_url_includes_tracking_params(monkeypatch):
     monkeypatch.setattr(app, "st", streamlit_stub)
 
     url = app.build_checkout_success_url("p_1", "token_1", "review")
+    parsed = urllib.parse.urlparse(url)
+    params = urllib.parse.parse_qs(parsed.query)
 
     assert "session_id={CHECKOUT_SESSION_ID}" in url
     assert "purchase_id=p_1" in url
     assert "product_type=review" in url
+    assert "access_token" not in params
+    assert "access_token" not in parsed.fragment
+    assert "token_1" not in url
     assert "utm_source=instagram" in url
     assert "utm_medium=paid_social" in url
     assert "utm_campaign=summer" in url
@@ -778,6 +838,10 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
 
     assert error is None
     assert checkout_url == "https://checkout.example/session"
+    parsed_success_url = urllib.parse.urlparse(captured["success_url"])
+    success_params = urllib.parse.parse_qs(parsed_success_url.query)
+    assert "access_token" not in success_params
+    assert "token_1" not in captured["success_url"]
     assert captured["client_reference_id"] == "p_1"
     metadata = captured["metadata"]
     assert metadata["purchase_id"] == "p_1"
