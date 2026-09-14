@@ -120,7 +120,6 @@ def test_purchase_id_token_mismatch_does_not_fallback_to_active_purchase(monkeyp
     st_stub = make_streamlit_stub()
     st_stub.query_params = {
         "purchase_id": "p_a",
-        "access_token": "token_b",
         "product_type": app.PRODUCT_TYPE_REGULAR,
         "action": "resume",
     }
@@ -130,6 +129,7 @@ def test_purchase_id_token_mismatch_does_not_fallback_to_active_purchase(monkeyp
     st_stub.session_state.self_resume_purchase_id = "p_previous"
 
     monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda purchase_id: ("token_b", "received"))
     monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_b"})
     monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: pytest.fail("must not fallback"))
 
@@ -139,6 +139,136 @@ def test_purchase_id_token_mismatch_does_not_fallback_to_active_purchase(monkeyp
     assert st_stub.session_state.self_resume_url is None
     assert st_stub.session_state.self_resume_purchase_id is None
     assert st_stub.query_params == {}
+
+
+def test_self_resume_fragment_pending_does_not_fallback_to_active_purchase(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "purchase_id": "p_a",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+        "action": "resume",
+    }
+    st_stub.session_state.active_purchase_id = "p_previous"
+    st_stub.session_state.active_access_token = "previous_token"
+    st_stub.session_state.self_resume_url = "https://example.test/previous"
+    st_stub.session_state.self_resume_purchase_id = "p_previous"
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda purchase_id: (None, "pending"))
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: pytest.fail("must not fallback"))
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.active_purchase_id is None
+    assert st_stub.session_state.active_access_token is None
+    assert st_stub.session_state.self_resume_url is None
+    assert st_stub.session_state.self_resume_purchase_id is None
+    assert st_stub.session_state.purchase_token_pending is True
+
+
+def test_success_return_accepts_session_storage_token_for_same_purchase(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    cleanups = []
+    purchase = make_purchase(purchase_id="p_success")
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("token_success", "received"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_success"})
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)))
+
+    assert app.get_current_purchase_record() == purchase
+    assert st_stub.session_state.active_purchase_id == "p_success"
+    assert st_stub.session_state.active_access_token == "token_success"
+    assert "access_token" not in st_stub.query_params
+    assert st_stub.query_params == {}
+    assert cleanups == [("p_success", "success")]
+
+
+def test_success_return_rejects_query_purchase_mismatch(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_query",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    cleanups = []
+    purchase = make_purchase(purchase_id="p_session")
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: pytest.fail("must not read token"))
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)))
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_auth_failed is True
+    assert st_stub.query_params == {}
+    assert cleanups == [("p_query", "mismatch")]
+
+
+def test_success_return_rejects_missing_query_purchase_id(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    cleanups = []
+    purchase = make_purchase(purchase_id="p_session")
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: pytest.fail("must not read token"))
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)))
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_auth_failed is True
+    assert st_stub.query_params == {}
+    assert cleanups == [("p_session", "mismatch")]
+
+
+def test_success_return_rejects_invalid_session_storage_token(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    cleanups = []
+    purchase = make_purchase(purchase_id="p_success")
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("wrong_token", "received"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: None)
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)))
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_auth_failed is True
+    assert st_stub.session_state.active_purchase_id is None
+    assert st_stub.query_params == {}
+    assert cleanups == [("p_success", "invalid")]
+
+
+def test_success_return_stale_session_storage_token_is_rejected(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    purchase = make_purchase(purchase_id="p_success")
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: (None, "stale"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: pytest.fail("must not authenticate stale token"))
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_auth_failed is True
 
 
 def test_used_ready_pdf_routes_to_pdf_recovery(monkeypatch):

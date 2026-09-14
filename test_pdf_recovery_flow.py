@@ -54,7 +54,7 @@ def make_streamlit_stub(access_token="token"):
     return SimpleNamespace(
         calls=calls,
         session_state=AttrDict(active_access_token=access_token),
-        query_params={"purchase_id": "p_123", "access_token": access_token},
+        query_params={"purchase_id": "p_123"},
         success=lambda value, **kwargs: calls.append(("success", value)),
         info=lambda value, **kwargs: calls.append(("info", value)),
         warning=lambda value, **kwargs: calls.append(("warning", value)),
@@ -549,9 +549,10 @@ def test_interrupted_ready_purchase_finalizes_with_consume_only(monkeypatch):
     ]
 
 
-def test_recovery_download_works_from_url_token_and_empty_pdf_session(monkeypatch):
+def test_recovery_download_works_from_active_token_and_empty_pdf_session(monkeypatch):
     streamlit_stub = make_streamlit_stub(access_token="token")
-    streamlit_stub.session_state = AttrDict(active_access_token=None, fortune_pdf_bytes=None)
+    streamlit_stub.session_state = AttrDict(active_access_token="token", fortune_pdf_bytes=None)
+    streamlit_stub.query_params = {"purchase_id": "p_123"}
     monkeypatch.setattr(app, "st", streamlit_stub)
     monkeypatch.setattr(app, "is_pdf_recovery_enabled", lambda: True)
     monkeypatch.setattr(app, "read_pdf_for_recovery", lambda object_path: b"pdf-bytes")

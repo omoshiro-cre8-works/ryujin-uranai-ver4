@@ -104,6 +104,8 @@ APP_BASE_URL = os.getenv(
     "APP_BASE_URL",
     "https://ai-uranai-h1-155905710900.asia-northeast2.run.app",
 ).rstrip("/")
+PENDING_CHECKOUT_TOKEN_STORAGE_PREFIX = "ryujin_pending_purchase_"
+PENDING_CHECKOUT_TOKEN_TTL_SECONDS = 2 * 60 * 60
 WIX_REGULAR_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai"
 WIX_SITE_TOP_URL = "https://www.omoshiro-cre8works.com/"
 WIX_REVIEW_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai/mikaeshibin"
@@ -210,6 +212,145 @@ VALID_GA4_CHECKOUT_REQUEST_STATUSES = {
     "disabled",
     "exception",
 }
+
+TOKEN_BRIDGE_JS = """
+export default function({ data, setStateValue }) {
+  const payload = data || {};
+  const prefix = payload.prefix || "ryujin_pending_purchase_";
+  const nowMs = Date.now();
+  const ttlSeconds = Number(payload.ttl_seconds || 7200);
+
+  function emit(status, extra = {}) {
+    setStateValue("payload", { status, ...extra });
+  }
+
+  function storageKey(purchaseId) {
+    return `${prefix}${purchaseId}`;
+  }
+
+  function cleanupExpired() {
+    try {
+      const keys = [];
+      for (let index = 0; index < window.sessionStorage.length; index += 1) {
+        const key = window.sessionStorage.key(index);
+        if (key && key.startsWith(prefix)) keys.push(key);
+      }
+      keys.forEach((key) => {
+        try {
+          const value = JSON.parse(window.sessionStorage.getItem(key) || "{}");
+          const expiresAt = Date.parse(String(value.expires_at || ""));
+          if (!expiresAt || expiresAt <= nowMs || value.purchase_id !== key.slice(prefix.length)) {
+            window.sessionStorage.removeItem(key);
+          }
+        } catch (error) {
+          window.sessionStorage.removeItem(key);
+        }
+      });
+    } catch (error) {
+      // sessionStorage may be unavailable. The error detail is intentionally not emitted.
+    }
+  }
+
+  function cleanupFragment() {
+    try {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    } catch (error) {
+      // Best effort only.
+    }
+  }
+
+  cleanupExpired();
+
+  try {
+    if (payload.action === "store") {
+      const purchaseId = String(payload.purchase_id || "");
+      const token = String(payload.token || "");
+      if (!purchaseId || !token) {
+        emit("error", { reason: "missing_data", purchase_id: purchaseId });
+        return;
+      }
+      const expiresAtMs = nowMs + ttlSeconds * 1000;
+      window.sessionStorage.setItem(
+        storageKey(purchaseId),
+        JSON.stringify({
+          token,
+          purchase_id: purchaseId,
+          created_at: new Date(nowMs).toISOString(),
+          expires_at: new Date(expiresAtMs).toISOString()
+        })
+      );
+      emit("stored", { purchase_id: purchaseId });
+      return;
+    }
+
+    if (payload.action === "read_session") {
+      const purchaseId = String(payload.purchase_id || "");
+      if (!purchaseId) {
+        emit("error", { reason: "missing_purchase_id" });
+        return;
+      }
+      const key = storageKey(purchaseId);
+      const rawValue = window.sessionStorage.getItem(key);
+      if (!rawValue) {
+        emit("missing", { purchase_id: purchaseId });
+        return;
+      }
+      let value;
+      try {
+        value = JSON.parse(rawValue);
+      } catch (error) {
+        window.sessionStorage.removeItem(key);
+        emit("malformed", { purchase_id: purchaseId });
+        return;
+      }
+      const expiresAtMs = Date.parse(String(value.expires_at || ""));
+      if (value.purchase_id !== purchaseId || !value.token || !expiresAtMs || expiresAtMs <= nowMs) {
+        window.sessionStorage.removeItem(key);
+        emit("stale", { purchase_id: purchaseId });
+        return;
+      }
+      emit("received", { purchase_id: purchaseId, token: String(value.token) });
+      return;
+    }
+
+    if (payload.action === "cleanup") {
+      const purchaseId = String(payload.purchase_id || "");
+      if (purchaseId) {
+        window.sessionStorage.removeItem(storageKey(purchaseId));
+      }
+      emit("cleaned", { purchase_id: purchaseId });
+      return;
+    }
+
+    if (payload.action === "read_fragment") {
+      const purchaseId = String(payload.purchase_id || "");
+      const hash = window.location.hash ? window.location.hash.slice(1) : "";
+      if (!hash) {
+        emit("missing", { purchase_id: purchaseId });
+        return;
+      }
+      const params = new URLSearchParams(hash);
+      const token = params.get("access_token") || "";
+      cleanupFragment();
+      if (!token) {
+        emit("missing", { purchase_id: purchaseId });
+        return;
+      }
+      emit("received", { purchase_id: purchaseId, token });
+      return;
+    }
+
+    emit("idle");
+  } catch (error) {
+    emit("error", { reason: "storage_unavailable" });
+  }
+}
+"""
+
+token_bridge_component = st.components.v2.component(
+    "ryujin_token_bridge",
+    js=TOKEN_BRIDGE_JS,
+)
 ASSETS_DIR = BASE_DIR / "assets"
 REGULAR_COMPLETION_ILLUSTRATION = os.getenv(
     "REGULAR_COMPLETION_ILLUSTRATION",
@@ -358,6 +499,16 @@ def init_session_state() -> None:
         st.session_state.checkout_url = None
     if "checkout_product_type" not in st.session_state:
         st.session_state.checkout_product_type = None
+    if "checkout_token_stored_purchase_id" not in st.session_state:
+        st.session_state.checkout_token_stored_purchase_id = None
+    if "checkout_token_storage_failed" not in st.session_state:
+        st.session_state.checkout_token_storage_failed = False
+    if "purchase_token_pending" not in st.session_state:
+        st.session_state.purchase_token_pending = False
+    if "purchase_token_pending_reason" not in st.session_state:
+        st.session_state.purchase_token_pending_reason = None
+    if "purchase_token_auth_failed" not in st.session_state:
+        st.session_state.purchase_token_auth_failed = False
     ga4_client_id_from_query = clean_ga4_identifier(get_query_param_value("ga4_client_id"))
     ga4_session_id_from_query = clean_ga4_identifier(get_query_param_value("ga4_session_id"))
     set_ga4_observation_state(
@@ -700,7 +851,10 @@ def get_utm_params() -> dict[str, str]:
 def has_purchase_return_query_params() -> bool:
     return any(
         get_query_param_value(key)
-        for key in ("session_id", "purchase_id", "access_token")
+        for key in ("session_id", "access_token")
+    ) or (
+        (get_query_param_value("action") or "").strip().lower() == "resume"
+        and bool(get_query_param_value("purchase_id"))
     )
 
 
@@ -789,11 +943,14 @@ def get_checkout_price_type(product_type: str, price_id: str) -> str:
     return "regular"
 
 
-def build_checkout_success_url(purchase_id: str, access_token: str, product_type: str) -> str:
+def build_checkout_success_url(
+    purchase_id: str,
+    access_token: str | None = None,
+    product_type: str = PRODUCT_TYPE_REGULAR,
+) -> str:
     tracking_params = tracking_params_for_storage(product_type)
     query_params = {
         "purchase_id": purchase_id,
-        "access_token": access_token,
         "product_type": normalize_product_type(product_type),
         **{
             key: value
@@ -817,11 +974,14 @@ def build_checkout_success_url(purchase_id: str, access_token: str, product_type
 def build_self_resume_url(purchase_id: str, access_token: str, product_type: str) -> str:
     query_params = {
         "purchase_id": purchase_id,
-        "access_token": access_token,
         "product_type": normalize_product_type(product_type),
         "action": "resume",
     }
-    return f"{APP_BASE_URL}/?{urllib.parse.urlencode(query_params)}"
+    fragment_params = {"access_token": access_token}
+    return (
+        f"{APP_BASE_URL}/?{urllib.parse.urlencode(query_params)}"
+        f"#{urllib.parse.urlencode(fragment_params)}"
+    )
 
 def track_ga4_event(
     event_name: str,
@@ -974,6 +1134,114 @@ def get_active_checkout_price(product_type: str, logger: logging.Logger | None =
 def clear_checkout_session_state() -> None:
     st.session_state.checkout_url = None
     st.session_state.checkout_product_type = None
+    st.session_state["checkout_token_stored_purchase_id"] = None
+    st.session_state["checkout_token_storage_failed"] = False
+
+
+def clear_active_purchase_context() -> None:
+    st.session_state["active_purchase_id"] = None
+    st.session_state["active_access_token"] = None
+    st.session_state["self_resume_url"] = None
+    st.session_state["self_resume_purchase_id"] = None
+
+
+def reset_purchase_token_status() -> None:
+    st.session_state["purchase_token_pending"] = False
+    st.session_state["purchase_token_pending_reason"] = None
+    st.session_state["purchase_token_auth_failed"] = False
+
+
+def mark_purchase_token_pending(reason: str) -> None:
+    st.session_state["purchase_token_pending"] = True
+    st.session_state["purchase_token_pending_reason"] = reason
+    st.session_state["purchase_token_auth_failed"] = False
+
+
+def mark_purchase_token_auth_failed() -> None:
+    st.session_state["purchase_token_pending"] = False
+    st.session_state["purchase_token_pending_reason"] = None
+    st.session_state["purchase_token_auth_failed"] = True
+
+
+def get_token_bridge_payload(result: Any) -> dict[str, Any]:
+    payload = getattr(result, "payload", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def mount_token_bridge(
+    action: str,
+    *,
+    purchase_id: str | None = None,
+    token: str | None = None,
+    key_suffix: str | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "action": action,
+        "purchase_id": purchase_id or "",
+        "prefix": PENDING_CHECKOUT_TOKEN_STORAGE_PREFIX,
+        "ttl_seconds": PENDING_CHECKOUT_TOKEN_TTL_SECONDS,
+    }
+    if token is not None:
+        data["token"] = token
+    key_parts = ["token_bridge", action, key_suffix or purchase_id or "none"]
+    result = token_bridge_component(
+        data=data,
+        default={"payload": {"status": "pending", "purchase_id": purchase_id or ""}},
+        key="_".join(str(part) for part in key_parts),
+        on_payload_change=lambda: None,
+        height=0,
+    )
+    return get_token_bridge_payload(result)
+
+
+def cleanup_pending_checkout_token(purchase_id: str | None, *, reason: str = "done") -> None:
+    if not purchase_id:
+        return
+    mount_token_bridge("cleanup", purchase_id=purchase_id, key_suffix=f"{purchase_id}_{reason}")
+
+
+def prepare_checkout_token_for_browser(purchase_id: str, access_token: str) -> bool | None:
+    if not purchase_id or not access_token:
+        st.session_state["checkout_token_storage_failed"] = True
+        return False
+    if st.session_state.get("checkout_token_stored_purchase_id") == purchase_id:
+        return True
+    if st.session_state.get("checkout_token_storage_failed"):
+        return False
+
+    payload = mount_token_bridge(
+        "store",
+        purchase_id=purchase_id,
+        token=access_token,
+        key_suffix=purchase_id,
+    )
+    status = str(payload.get("status") or "")
+    if status == "stored" and payload.get("purchase_id") == purchase_id:
+        st.session_state["checkout_token_stored_purchase_id"] = purchase_id
+        st.session_state["checkout_token_storage_failed"] = False
+        return True
+    if status == "error":
+        st.session_state["checkout_token_storage_failed"] = True
+        return False
+    return None
+
+
+def read_checkout_token_from_browser(purchase_id: str) -> tuple[str | None, str]:
+    payload = mount_token_bridge("read_session", purchase_id=purchase_id, key_suffix=purchase_id)
+    status = str(payload.get("status") or "pending")
+    token = payload.get("token")
+    if status == "received" and isinstance(token, str) and token:
+        return token, status
+    return None, status
+
+
+def read_fragment_token_from_browser(purchase_id: str) -> tuple[str | None, str]:
+    payload = mount_token_bridge("read_fragment", purchase_id=purchase_id, key_suffix=purchase_id)
+    status = str(payload.get("status") or "pending")
+    token = payload.get("token")
+    if status == "received" and isinstance(token, str) and token:
+        return token, status
+    return None, status
 
 
 def build_uploaded_files_signature(uploaded_files: list[Any]) -> str | None:
@@ -1224,7 +1492,6 @@ def create_checkout_session(product_type: str, logger: logging.Logger) -> tuple[
             ],
             success_url=build_checkout_success_url(
                 purchase_id=purchase_id,
-                access_token=str(record.get("_access_token") or ""),
                 product_type=product_type,
             ),
             cancel_url=WIX_CANCEL_URL,
@@ -1519,11 +1786,7 @@ def finalize_interrupted_pdf_generation_if_ready(
         return None
 
     purchase_id = str(active_purchase.get("purchase_id") or "")
-    access_token = str(
-        st.session_state.get("active_access_token")
-        or get_query_param_value("access_token")
-        or ""
-    )
+    access_token = str(st.session_state.get("active_access_token") or "")
     if not can_finalize_interrupted_pdf_generation(active_purchase, access_token):
         return None
 
@@ -1762,31 +2025,69 @@ def generate_review_fortune_pdf_and_consume(
 
 def get_current_purchase_record() -> dict[str, Any] | None:
     session_id = st.query_params.get("session_id")
-    access_token = get_query_param_value("access_token")
+    legacy_query_access_token = get_query_param_value("access_token")
     purchase_id = get_query_param_value("purchase_id")
+    action = (get_query_param_value("action") or "").strip().lower()
     should_clean_purchase_query = False
+    reset_purchase_token_status()
     if session_id:
         synced_record = sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
         if synced_record:
-            if access_token:
-                token_record = get_purchase_by_access_token(access_token)
-                if (
-                    token_record
-                    and token_record.get("purchase_id") == synced_record.get("purchase_id")
-                ):
-                    st.session_state.active_access_token = access_token
-                    st.session_state.self_resume_url = build_self_resume_url(
-                        str(synced_record.get("purchase_id") or ""),
-                        access_token,
-                        get_purchase_product_type(synced_record),
-                    )
-                    st.session_state.self_resume_purchase_id = synced_record.get("purchase_id")
-            should_clean_purchase_query = bool(access_token or purchase_id or get_query_param_value("product_type"))
-            if should_clean_purchase_query:
-                st.session_state.active_purchase_id = synced_record.get("purchase_id")
+            synced_purchase_id = str(synced_record.get("purchase_id") or "")
+            if not purchase_id or purchase_id != synced_purchase_id:
+                mark_purchase_token_auth_failed()
+                clear_active_purchase_context()
+                cleanup_pending_checkout_token(purchase_id or synced_purchase_id, reason="mismatch")
                 clean_purchase_query_params()
-            return synced_record
-    if access_token:
+                return None
+            access_token = str(st.session_state.get("active_access_token") or "")
+            if not access_token or st.session_state.get("active_purchase_id") != synced_purchase_id:
+                access_token, token_status = read_checkout_token_from_browser(synced_purchase_id)
+                if not access_token:
+                    clear_active_purchase_context()
+                    if token_status in {"stale", "malformed", "error"}:
+                        mark_purchase_token_auth_failed()
+                    else:
+                        mark_purchase_token_pending(token_status)
+                    return None
+
+            token_record = get_purchase_by_access_token(access_token)
+            if (
+                token_record
+                and str(token_record.get("purchase_id") or "") == synced_purchase_id
+            ):
+                st.session_state.active_purchase_id = synced_purchase_id
+                st.session_state.active_access_token = access_token
+                st.session_state.self_resume_url = build_self_resume_url(
+                    synced_purchase_id,
+                    access_token,
+                    get_purchase_product_type(synced_record),
+                )
+                st.session_state.self_resume_purchase_id = synced_purchase_id
+                cleanup_pending_checkout_token(synced_purchase_id, reason="success")
+                should_clean_purchase_query = bool(session_id or purchase_id or get_query_param_value("product_type"))
+                if should_clean_purchase_query:
+                    clean_purchase_query_params()
+                return synced_record
+
+            mark_purchase_token_auth_failed()
+            clear_active_purchase_context()
+            cleanup_pending_checkout_token(synced_purchase_id, reason="invalid")
+            if purchase_id or get_query_param_value("product_type"):
+                clean_purchase_query_params()
+            return None
+    if action == "resume" and purchase_id:
+        access_token = str(st.session_state.get("active_access_token") or "")
+        if not access_token or st.session_state.get("active_purchase_id") != purchase_id:
+            access_token, token_status = read_fragment_token_from_browser(purchase_id)
+            if not access_token:
+                clear_active_purchase_context()
+                if token_status in {"stale", "malformed", "error"}:
+                    mark_purchase_token_auth_failed()
+                else:
+                    mark_purchase_token_pending(token_status)
+                return None
+
         token_record = get_purchase_by_access_token(access_token)
         if token_record and (not purchase_id or str(token_record.get("purchase_id") or "") == purchase_id):
             st.session_state.active_purchase_id = token_record.get("purchase_id")
@@ -1799,10 +2100,13 @@ def get_current_purchase_record() -> dict[str, Any] | None:
             st.session_state.self_resume_purchase_id = token_record.get("purchase_id")
             clean_purchase_query_params()
             return token_record
-        st.session_state.active_purchase_id = None
-        st.session_state.active_access_token = None
-        st.session_state.self_resume_url = None
-        st.session_state.self_resume_purchase_id = None
+        clear_active_purchase_context()
+        mark_purchase_token_auth_failed()
+        clean_purchase_query_params()
+        return None
+    if legacy_query_access_token:
+        clear_active_purchase_context()
+        mark_purchase_token_auth_failed()
         clean_purchase_query_params()
         return None
     active_purchase_id = st.session_state.get("active_purchase_id")
@@ -1884,6 +2188,19 @@ def render_checkout_link(checkout_url: str, amount_jpy: int) -> None:
     )
 
 
+def render_checkout_link_when_token_stored(checkout_url: str, amount_jpy: int) -> None:
+    purchase_id = str(st.session_state.get("active_purchase_id") or "")
+    access_token = str(st.session_state.get("active_access_token") or "")
+    storage_status = prepare_checkout_token_for_browser(purchase_id, access_token)
+    if storage_status is True:
+        render_checkout_link(checkout_url, amount_jpy)
+        return
+    if storage_status is False:
+        st.error("決済ページを安全に準備できませんでした。ページを再読み込みして、もう一度お試しください。")
+        return
+    st.info("決済ページを安全に準備しています。数秒お待ちください。")
+
+
 
 def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
     product_type = normalize_product_type(product_type)
@@ -1935,7 +2252,7 @@ def render_direct_checkout(product_type: str, logger: logging.Logger) -> None:
         )
         st.info("下のボタンを押すと、Stripeの決済ページへ移動します。")
 
-    render_checkout_link(checkout_url, active_amount_jpy)
+    render_checkout_link_when_token_stored(checkout_url, active_amount_jpy)
 
     if product_type == PRODUCT_TYPE_REVIEW:
         st.info("決済が完了すると、このページに戻り、見返し便フォームが表示されます。")
@@ -2073,6 +2390,13 @@ def render_payment_section(
 
     record = get_current_purchase_record()
 
+    if st.session_state.get("purchase_token_pending"):
+        st.info("購入情報を確認しています。数秒お待ちください。")
+        return None
+    if st.session_state.get("purchase_token_auth_failed"):
+        st.warning("購入情報を確認できませんでした。保存済みの再開URLがある場合は、そちらから再度お試しください。")
+        return None
+
     if is_purchase_ready(record):
         st.success("決済確認が完了しました。鑑定フォームをご利用いただけます。")
         return record
@@ -2103,7 +2427,7 @@ def render_payment_section(
 
     if checkout_url:
         render_checkout_reassurance(product_type, active_amount_jpy)
-        render_checkout_link(checkout_url, active_amount_jpy)
+        render_checkout_link_when_token_stored(checkout_url, active_amount_jpy)
 
     return None
 
@@ -2353,11 +2677,7 @@ def render_pdf_recovery_screen(
         return False
 
     product_type = get_purchase_product_type(active_purchase)
-    access_token = str(
-        st.session_state.get("active_access_token")
-        or get_query_param_value("access_token")
-        or ""
-    )
+    access_token = str(st.session_state.get("active_access_token") or "")
     scroll_completion_screen_to_top()
     render_form_gap(2)
     render_header(title_top_gap_rem=0.6, header_top_gap_rem=1.1)
@@ -3309,6 +3629,14 @@ def main() -> None:
         else requested_product_type
     )
     track_streamlit_page_view(logger, display_product_type)
+
+    session_state = getattr(st, "session_state", {})
+    if session_state.get("purchase_token_pending"):
+        st.info("購入情報を確認しています。数秒お待ちください。")
+        return
+    if session_state.get("purchase_token_auth_failed"):
+        st.warning("購入情報を確認できませんでした。保存済みの再開URLがある場合は、そちらから再度お試しください。")
+        return
 
     if direct_checkout_requested:
         render_direct_checkout(requested_product_type, logger)
