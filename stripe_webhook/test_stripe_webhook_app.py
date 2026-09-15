@@ -64,7 +64,7 @@ def purchase_record() -> dict:
         "purchase_id": "p_1",
         "stripe_checkout_session_id": "cs_test_1",
         "payment_status": "pending",
-        "amount_jpy": 300,
+        "amount_jpy": 500,
         "currency": "jpy",
         "price_id": "price_1",
         "product_type": "regular",
@@ -86,7 +86,7 @@ def checkout_session(*, payment_status: str = "paid", status: str = "complete") 
         "client_reference_id": "p_1",
         "payment_status": payment_status,
         "status": status,
-        "amount_total": 300,
+        "amount_total": 500,
         "currency": "jpy",
         "metadata": {
             "purchase_id": "p_1",
