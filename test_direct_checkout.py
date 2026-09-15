@@ -139,6 +139,20 @@ def test_review_checkout_price_uses_review_price_id(monkeypatch):
     assert amount_jpy == app.REVIEW_AMOUNT_JPY
 
 
+def test_review_pre_payment_intro_uses_updated_planned_and_active_prices(monkeypatch):
+    rendered = []
+    streamlit_stub = make_streamlit_stub()
+    streamlit_stub.markdown = lambda value, **kwargs: rendered.append(value)
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    app.render_pre_payment_intro(app.PRODUCT_TYPE_REVIEW, app.REVIEW_AMOUNT_JPY)
+
+    text = "\n".join(rendered)
+    assert "販売予定価格は980円" in text
+    assert "スタート記念価格980円" in text
+    assert "780円" not in text
+
+
 def make_streamlit_stub():
     return SimpleNamespace(
         session_state=AttrDict({"checkout_url": None, "checkout_product_type": None}),
@@ -159,7 +173,7 @@ def test_checkout_link_hidden_until_session_storage_saved(monkeypatch):
     monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: None)
     monkeypatch.setattr(app, "render_checkout_link", lambda *args, **kwargs: calls.append(("link", args)))
 
-    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 500)
 
     assert any(call[0] == "info" for call in calls)
     assert not any(call[0] == "link" for call in calls)
@@ -174,9 +188,9 @@ def test_checkout_link_shown_after_session_storage_saved(monkeypatch):
     monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: True)
     monkeypatch.setattr(app, "render_checkout_link", lambda url, amount: calls.append(("link", url, amount)))
 
-    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 500)
 
-    assert calls == [("link", "https://checkout.example/session", 300)]
+    assert calls == [("link", "https://checkout.example/session", 500)]
 
 
 def test_checkout_link_hidden_when_session_storage_fails(monkeypatch):
@@ -189,7 +203,7 @@ def test_checkout_link_hidden_when_session_storage_fails(monkeypatch):
     monkeypatch.setattr(app, "prepare_checkout_token_for_browser", lambda purchase_id, token: False)
     monkeypatch.setattr(app, "render_checkout_link", lambda *args, **kwargs: calls.append(("link", args)))
 
-    app.render_checkout_link_when_token_stored("https://checkout.example/session", 300)
+    app.render_checkout_link_when_token_stored("https://checkout.example/session", 500)
 
     assert any(call[0] == "error" for call in calls)
     assert not any(call[0] == "link" for call in calls)
@@ -264,7 +278,7 @@ def test_regular_direct_checkout_uses_regular_product(monkeypatch):
     monkeypatch.setattr(
         app,
         "get_active_checkout_price",
-        lambda product_type, logger: calls.append(("price", product_type)) or ("price_regular", 300),
+        lambda product_type, logger: calls.append(("price", product_type)) or ("price_regular", 500),
     )
     monkeypatch.setattr(
         app,
@@ -283,7 +297,7 @@ def test_regular_direct_checkout_uses_regular_product(monkeypatch):
     assert calls == [
         ("price", "regular"),
         ("checkout", "regular"),
-        ("link", "https://checkout.example/regular", 300),
+        ("link", "https://checkout.example/regular", 500),
     ]
 
 
@@ -300,7 +314,7 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     monkeypatch.setattr(
         app,
         "get_active_checkout_price",
-        lambda product_type, logger: calls.append(("price", product_type)) or ("price_review", 680),
+        lambda product_type, logger: calls.append(("price", product_type)) or ("price_review", 980),
     )
     monkeypatch.setattr(
         app,
@@ -339,10 +353,10 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     assert calls == [
         ("price", "review"),
         ("checkout", "review"),
-        ("link", "https://checkout.example/review", 680),
+        ("link", "https://checkout.example/review", 980),
     ]
     assert any("龍神さまのお告げ 見返し便" in value for value in rendered_markdown)
-    assert any("680円" in value for value in rendered_markdown)
+    assert any("980円" in value for value in rendered_markdown)
     assert any("見返し便フォーム" in value for value in rendered_info)
 
 
@@ -489,7 +503,7 @@ def test_cancel_return_root_does_not_create_checkout_session(monkeypatch):
     monkeypatch.setattr(
         app,
         "get_active_checkout_price",
-        lambda product_type, logger: ("price_regular", 300),
+        lambda product_type, logger: ("price_regular", 500),
     )
     monkeypatch.setattr(app, "render_pre_payment_intro", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_usage_flow", lambda *args, **kwargs: None)
@@ -925,7 +939,7 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
     monkeypatch.setattr(app, "st", streamlit_stub)
     monkeypatch.setattr(app, "stripe", stripe_stub)
     monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
-    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 680))
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 980))
     monkeypatch.setattr(
         app,
         "create_purchase_record",
@@ -955,7 +969,7 @@ def test_create_checkout_session_keeps_existing_metadata_and_adds_tracking(monke
     assert metadata["product_type"] == "review"
     assert metadata["price_type"] == "review_regular"
     assert metadata["price_id"] == "price_review"
-    assert metadata["amount_jpy"] == "680"
+    assert metadata["amount_jpy"] == "980"
     assert metadata["service_id"] == "ryujin"
     assert metadata["utm_source"] == "instagram"
     assert metadata["entry_lp"] == "lp_d"
@@ -1008,7 +1022,7 @@ def test_create_checkout_session_keeps_sample_bottom_in_metadata(monkeypatch):
     monkeypatch.setattr(app, "st", streamlit_stub)
     monkeypatch.setattr(app, "stripe", stripe_stub)
     monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
-    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 680))
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_review", 980))
     monkeypatch.setattr(
         app,
         "create_purchase_record",
@@ -1082,7 +1096,7 @@ def test_checkout_ga4_status_update_failure_does_not_block_checkout(monkeypatch)
     monkeypatch.setattr(app, "st", streamlit_stub)
     monkeypatch.setattr(app, "stripe", stripe_stub)
     monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
-    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_regular", 300))
+    monkeypatch.setattr(app, "get_active_checkout_price", lambda product_type, logger: ("price_regular", 500))
     monkeypatch.setattr(
         app,
         "create_purchase_record",

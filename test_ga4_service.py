@@ -108,10 +108,10 @@ def test_ga4_send_failure_status(monkeypatch):
 
 
 def test_ga4_clean_event_params_truncates_string_values():
-    params = ga4_service._clean_event_params({"utm_campaign": "x" * 130, "amount_jpy": 680})
+    params = ga4_service._clean_event_params({"utm_campaign": "x" * 130, "amount_jpy": 980})
 
     assert len(params["utm_campaign"]) == ga4_service.GA4_PARAM_VALUE_MAX_LENGTH
-    assert params["amount_jpy"] == 680
+    assert params["amount_jpy"] == 980
 
 def test_ga4_payload_uses_client_id_and_event_session_id(monkeypatch):
     captured = {}
