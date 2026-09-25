@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from google.cloud import firestore
 
+from services.self_resume_service import VALID_SELF_RESUME_PRODUCT_TYPES
 from stripe_webhook.environment_config import (
     build_firestore_client_kwargs,
     get_firestore_collection_name,
@@ -37,6 +38,16 @@ PDF_CONSUME_ONLY_MATCH_FIELDS = (
     "pdf_artifact_version",
 )
 SELF_RESUME_DAYS = 7
+TOKEN_RESCUE_ELIGIBLE = "eligible"
+TOKEN_RESCUE_NOT_FOUND = "purchase_not_found"
+TOKEN_RESCUE_NOT_PAID = "not_paid"
+TOKEN_RESCUE_USED = "already_used"
+TOKEN_RESCUE_PROCESSING = "generation_processing"
+TOKEN_RESCUE_MISSING_CHECKOUT_COMPLETED_AT = "missing_checkout_completed_at"
+TOKEN_RESCUE_EXPIRED = "self_resume_expired"
+TOKEN_RESCUE_UNSUPPORTED_PRODUCT = "unsupported_product_type"
+TOKEN_RESCUE_PDF_GENERATED = "pdf_already_generated"
+TOKEN_RESCUE_INVALID_INPUT = "invalid_input"
 
 
 def _now_utc() -> datetime:
@@ -68,6 +79,44 @@ def get_self_resume_expires_at(purchase: Dict[str, Any] | None) -> datetime | No
     return _as_utc_datetime(purchase.get("token_expires_at"))
 
 
+def is_purchase_token_rescue_window_active(
+    purchase: Dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if not purchase or not _as_utc_datetime(purchase.get("checkout_completed_at")):
+        return False
+    expires_at = get_self_resume_expires_at(purchase)
+    current_time = _as_utc_datetime(now) or _now_utc()
+    return bool(expires_at and current_time <= expires_at)
+
+
+def get_purchase_token_rescue_status(
+    purchase: Dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    if not purchase:
+        return TOKEN_RESCUE_NOT_FOUND
+    if purchase.get("payment_status") != "paid":
+        return TOKEN_RESCUE_NOT_PAID
+    if purchase.get("used_flag") is not False:
+        return TOKEN_RESCUE_USED
+    if purchase.get("generation_processing") is True:
+        return TOKEN_RESCUE_PROCESSING
+    if purchase.get("product_type") not in VALID_SELF_RESUME_PRODUCT_TYPES:
+        return TOKEN_RESCUE_UNSUPPORTED_PRODUCT
+    if purchase.get("pdf_status") == PDF_STATUS_READY or purchase.get("pdf_generated_at"):
+        return TOKEN_RESCUE_PDF_GENERATED
+
+    checkout_completed_at = _as_utc_datetime(purchase.get("checkout_completed_at"))
+    if not checkout_completed_at:
+        return TOKEN_RESCUE_MISSING_CHECKOUT_COMPLETED_AT
+    if not is_purchase_token_rescue_window_active(purchase, now=now):
+        return TOKEN_RESCUE_EXPIRED
+    return TOKEN_RESCUE_ELIGIBLE
+
+
 def get_firestore_client() -> firestore.Client:
     """
     Firestore クライアントを返す。
@@ -79,8 +128,11 @@ def get_firestore_client() -> firestore.Client:
     return firestore.Client(**client_kwargs)
 
 
-def get_purchase_collection(db: firestore.Client):
-    return db.collection(get_firestore_collection_name())
+def get_purchase_collection(
+    db: firestore.Client,
+    collection_name: str | None = None,
+):
+    return db.collection(collection_name or get_firestore_collection_name())
 
 
 def hash_access_token(access_token: str) -> str:
@@ -187,12 +239,17 @@ def create_purchase_record(
     doc_ref.set(payload)
     return purchase_id
 
-def get_purchase_by_id(purchase_id: str) -> Optional[Dict[str, Any]]:
+def get_purchase_by_id(
+    purchase_id: str,
+    *,
+    db: firestore.Client | None = None,
+    collection_name: str | None = None,
+) -> Optional[Dict[str, Any]]:
     """
     purchase_id で購入レコードを取得する。
     """
-    db = get_firestore_client()
-    doc_ref = get_purchase_collection(db).document(purchase_id)
+    db = db or get_firestore_client()
+    doc_ref = get_purchase_collection(db, collection_name).document(purchase_id)
     snapshot = doc_ref.get()
 
     if not snapshot.exists:
@@ -485,6 +542,44 @@ def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
         return GENERATION_CLAIMED
 
     return claim(transaction)
+
+
+def reissue_purchase_access_token_transaction(
+    purchase_id: str,
+    new_access_token: str,
+    *,
+    db: firestore.Client | None = None,
+    collection_name: str | None = None,
+) -> str:
+    """救済条件をtransaction内で再確認し、access token hashだけを差し替える。"""
+    if not purchase_id or not new_access_token:
+        return TOKEN_RESCUE_INVALID_INPUT
+
+    db = db or get_firestore_client()
+    doc_ref = get_purchase_collection(db, collection_name).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def reissue(transaction: Any) -> str:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return TOKEN_RESCUE_NOT_FOUND
+
+        purchase = snapshot.to_dict() or {}
+        status = get_purchase_token_rescue_status(purchase)
+        if status != TOKEN_RESCUE_ELIGIBLE:
+            return status
+
+        updates: Dict[str, Any] = {
+            "access_token_hash": hash_access_token(new_access_token),
+            "updated_at": _now_utc(),
+        }
+        if "access_token" in purchase:
+            updates["access_token"] = firestore.DELETE_FIELD
+        transaction.update(doc_ref, updates)
+        return TOKEN_RESCUE_ELIGIBLE
+
+    return reissue(transaction)
 
 
 def release_generation_claim_transaction(purchase_id: str, access_token: str) -> bool:

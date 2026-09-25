@@ -86,6 +86,9 @@ from services.pdf_storage_service import (
     sha256_pdf,
     upload_pdf_for_recovery,
 )
+from services.self_resume_service import (
+    build_self_resume_url as build_self_resume_url_from_base,
+)
 from services.validation_service import (
     format_birth_time_text,
     normalize_text,
@@ -1000,15 +1003,11 @@ def build_checkout_success_url(
 
 
 def build_self_resume_url(purchase_id: str, access_token: str, product_type: str) -> str:
-    query_params = {
-        "purchase_id": purchase_id,
-        "product_type": normalize_product_type(product_type),
-        "action": "resume",
-    }
-    fragment_params = {"access_token": access_token}
-    return (
-        f"{APP_BASE_URL}/?{urllib.parse.urlencode(query_params)}"
-        f"#{urllib.parse.urlencode(fragment_params)}"
+    return build_self_resume_url_from_base(
+        APP_BASE_URL,
+        purchase_id,
+        access_token,
+        product_type,
     )
 
 def track_ga4_event(
