@@ -2215,17 +2215,14 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
     st.html(
         f'''
         <div class="self-resume-notice">
-            <div class="self-resume-title">途中で閉じても、7日間は続きから再開できます</div>
+            <div class="self-resume-title">鑑定を始める前に、再開URLを保存してください</div>
             <div class="self-resume-body">
-                この鑑定は、決済完了から7日間、この再開URLから続きができます。<br>
-                鑑定が完了するまでは、この再開URLを保存しておくと安心です。<br>
-                画面を閉じる前に、下の再開URLをコピーしておいてください。
+                この鑑定は、決済完了から7日間、再開URLから続きができます。<br>
+                入力途中で画面を閉じた場合に備えて、先に「再開URLをコピー」を押し、メモ帳アプリなどに貼り付けて保存しておいてください。
             </div>
             {expires_html}
-            <div class="self-resume-link-label">再開用リンク</div>
-            <div class="self-resume-link">{safe_resume_url}</div>
             <div class="self-resume-note">
-                Instagramアプリ内ブラウザなどをご利用の場合は、画面を閉じる前に再開URLをコピーしておくことをおすすめします。
+                Instagramアプリ内ブラウザなどをご利用の場合は、画面を閉じるとこの画面へ戻れない場合があるため、入力前に再開URLを保存しておくことをおすすめします。
             </div>
             <div class="self-resume-contact">
                 再開URLが分からなくなった場合は、<a href="{html.escape(WIX_CONTACT_URL, quote=True)}" target="_blank" rel="noopener noreferrer">お問い合わせ</a>ください。
@@ -2259,29 +2256,6 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             line-height: 1.7;
             margin-top: 0.7rem;
         }}
-        .self-resume-link-label {{
-            color: #8a3d24;
-            font-size: 0.88rem;
-            font-weight: 700;
-            line-height: 1.6;
-            margin-top: 0.9rem;
-            margin-bottom: 0.3rem;
-        }}
-        .self-resume-link {{
-            color: #333333;
-            font-family: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", "YuMincho",
-                         "Noto Serif JP", "MS PMincho", Georgia, serif;
-            font-size: 0.86rem;
-            font-weight: 500;
-            line-height: 1.65;
-            overflow-wrap: anywhere;
-            word-break: break-all;
-            user-select: text;
-            background: #ffffff;
-            border: 1px solid #eadfd8;
-            border-radius: 8px;
-            padding: 0.75rem 0.8rem;
-        }}
         .self-resume-note,
         .self-resume-contact {{
             color: #6f625d;
@@ -2303,9 +2277,13 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             再開URLをコピー
         </button>
         <span id="copy-self-resume-status" role="status" aria-live="polite"></span>
+        <button id="show-self-resume-url" type="button" hidden>再開URLを表示</button>
+        <div id="manual-copy-container" hidden></div>
         <script>
         const copyButton = document.getElementById('copy-self-resume-url');
         const copyStatus = document.getElementById('copy-self-resume-status');
+        const showUrlButton = document.getElementById('show-self-resume-url');
+        const manualCopyContainer = document.getElementById('manual-copy-container');
 
         const copyWithFallback = (value) => {{
             const textarea = document.createElement('textarea');
@@ -2337,12 +2315,28 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             try {{
                 const resumeUrl = copyButton.dataset.copyValue;
                 await copyResumeUrl(resumeUrl);
-                copyStatus.textContent = 'コピーしました';
+                copyStatus.textContent = 'コピーしました。メモ帳などに貼り付けて保存してください。';
                 copyStatus.className = 'copy-success';
+                showUrlButton.hidden = true;
+                manualCopyContainer.hidden = true;
             }} catch (error) {{
-                copyStatus.textContent = 'コピーできませんでした。上のURLを選択してコピーしてください。';
+                copyStatus.textContent = 'コピーできませんでした。再開URLを表示して手動でコピーしてください。';
                 copyStatus.className = 'copy-error';
+                showUrlButton.hidden = false;
             }}
+        }});
+
+        showUrlButton.addEventListener('click', () => {{
+            const manualUrl = document.createElement('textarea');
+            manualUrl.id = 'manual-self-resume-url';
+            manualUrl.setAttribute('aria-label', '手動コピー用の再開URL');
+            manualUrl.readOnly = true;
+            manualUrl.value = copyButton.dataset.copyValue;
+            manualCopyContainer.replaceChildren(manualUrl);
+            manualCopyContainer.hidden = false;
+            showUrlButton.hidden = true;
+            manualUrl.focus();
+            manualUrl.select();
         }});
         </script>
         <style>
@@ -2355,7 +2349,8 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
             gap: 0.55rem 0.7rem;
         }}
-        #copy-self-resume-url {{
+        #copy-self-resume-url,
+        #show-self-resume-url {{
             border: 1px solid #b6552d;
             border-radius: 8px;
             background: #b6552d;
@@ -2366,10 +2361,12 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             line-height: 1.4;
             padding: 0.65rem 1rem;
         }}
-        #copy-self-resume-url:hover {{
+        #copy-self-resume-url:hover,
+        #show-self-resume-url:hover {{
             background: #984421;
         }}
-        #copy-self-resume-url:focus-visible {{
+        #copy-self-resume-url:focus-visible,
+        #show-self-resume-url:focus-visible {{
             outline: 2px solid #8a3d24;
             outline-offset: 2px;
         }}
@@ -2378,11 +2375,24 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             font-size: 0.84rem;
             line-height: 1.5;
         }}
+        #manual-copy-container {{
+            flex-basis: 100%;
+        }}
+        #manual-self-resume-url {{
+            box-sizing: border-box;
+            color: #333333;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            min-height: 4.2rem;
+            overflow-wrap: anywhere;
+            resize: vertical;
+            width: 100%;
+        }}
         .copy-success {{ color: #3f6f45; }}
         .copy-error {{ color: #8a3d24; }}
         </style>
         ''',
-        height=84,
+        height=160,
         scrolling=False,
     )
 
