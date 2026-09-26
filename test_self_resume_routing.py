@@ -204,11 +204,17 @@ def test_purchase_id_token_mismatch_does_not_fallback_to_active_purchase(monkeyp
     st_stub.session_state.active_access_token = "previous_token"
     st_stub.session_state.self_resume_url = "https://example.test/previous"
     st_stub.session_state.self_resume_purchase_id = "p_previous"
+    cleanups = []
 
     monkeypatch.setattr(app, "st", st_stub)
     monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda purchase_id: ("token_b", "received"))
     monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_b"})
     monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: pytest.fail("must not fallback"))
+    monkeypatch.setattr(
+        app,
+        "cleanup_self_resume_token",
+        lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)),
+    )
 
     assert app.get_current_purchase_record() is None
     assert st_stub.session_state.active_purchase_id is None
@@ -216,6 +222,7 @@ def test_purchase_id_token_mismatch_does_not_fallback_to_active_purchase(monkeyp
     assert st_stub.session_state.self_resume_url is None
     assert st_stub.session_state.self_resume_purchase_id is None
     assert st_stub.query_params == {}
+    assert cleanups == [("p_a", "invalid")]
 
 
 def test_self_resume_fragment_pending_does_not_fallback_to_active_purchase(monkeypatch):
@@ -240,6 +247,127 @@ def test_self_resume_fragment_pending_does_not_fallback_to_active_purchase(monke
     assert st_stub.session_state.self_resume_url is None
     assert st_stub.session_state.self_resume_purchase_id is None
     assert st_stub.session_state.purchase_token_pending is True
+    assert st_stub.session_state.purchase_token_missing is False
+
+
+def test_self_resume_reload_accepts_short_lived_session_token_and_keeps_routing_query(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "purchase_id": "p_reload",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+        "action": "resume",
+    }
+    purchase = make_purchase(purchase_id="p_reload")
+    validated_tokens = []
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(
+        app,
+        "read_fragment_token_from_browser",
+        lambda purchase_id: ("dummy_reload_token", "received"),
+    )
+    monkeypatch.setattr(
+        app,
+        "get_purchase_by_access_token",
+        lambda token: validated_tokens.append(token) or purchase,
+    )
+
+    assert app.get_current_purchase_record() == purchase
+    assert validated_tokens == ["dummy_reload_token"]
+    assert st_stub.session_state.active_purchase_id == "p_reload"
+    assert st_stub.session_state.active_access_token == "dummy_reload_token"
+    assert st_stub.query_params == {
+        "purchase_id": "p_reload",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+        "action": "resume",
+    }
+    assert "access_token" not in st_stub.query_params
+
+
+@pytest.mark.parametrize("token_status", ["missing", "stale", "malformed", "error"])
+def test_self_resume_missing_or_unusable_session_token_shows_recovery_state(
+    monkeypatch,
+    token_status,
+):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "purchase_id": "p_reload",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+        "action": "resume",
+    }
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(
+        app,
+        "read_fragment_token_from_browser",
+        lambda purchase_id: (None, token_status),
+    )
+    monkeypatch.setattr(
+        app,
+        "get_purchase_by_access_token",
+        lambda token: pytest.fail("missing token must not be authenticated"),
+    )
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_pending is False
+    assert st_stub.session_state.purchase_token_missing is True
+    assert st_stub.session_state.purchase_token_auth_failed is False
+    assert st_stub.query_params["action"] == "resume"
+
+
+def test_self_resume_missing_state_renders_recovery_guidance(monkeypatch):
+    st_stub, calls = setup_main_route(monkeypatch, None)
+    st_stub.session_state.purchase_token_missing = True
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: False)
+
+    app.main()
+
+    assert (
+        "warning",
+        "再開情報を確認できませんでした。保存してある再開URLをもう一度開いてください。",
+    ) in st_stub.calls
+    assert not any(call[0] in {"regular_form", "review_form", "payment"} for call in calls)
+
+
+def test_self_resume_fragment_reader_uses_separate_short_lived_storage(monkeypatch):
+    captured = {}
+
+    def mount(action, **kwargs):
+        captured["action"] = action
+        captured.update(kwargs)
+        return {"status": "received", "token": "dummy_fragment_token"}
+
+    monkeypatch.setattr(app, "mount_token_bridge", mount)
+
+    assert app.read_fragment_token_from_browser("p_dummy") == (
+        "dummy_fragment_token",
+        "received",
+    )
+    assert captured == {
+        "action": "read_fragment",
+        "purchase_id": "p_dummy",
+        "key_suffix": "p_dummy",
+        "storage_prefix": app.SELF_RESUME_TOKEN_STORAGE_PREFIX,
+        "ttl_seconds": app.SELF_RESUME_TOKEN_TTL_SECONDS,
+    }
+    assert app.SELF_RESUME_TOKEN_STORAGE_PREFIX != app.PENDING_CHECKOUT_TOKEN_STORAGE_PREFIX
+    assert app.SELF_RESUME_TOKEN_TTL_SECONDS == 2 * 60 * 60
+
+
+def test_self_resume_fragment_bridge_stores_before_cleanup_without_long_lived_storage():
+    script = app.TOKEN_BRIDGE_JS
+
+    fragment_branch = script.split('if (payload.action === "read_fragment") {', 1)[1]
+    assert "storeToken(purchaseId, token);" in fragment_branch
+    assert fragment_branch.index("storeToken(purchaseId, token);") < fragment_branch.index(
+        "cleanupFragment();", fragment_branch.index("storeToken(purchaseId, token);")
+    )
+    assert "readStoredToken(purchaseId)" in fragment_branch
+    assert "history.replaceState" in script
+    assert "sessionStorage" in script
+    assert "localStorage" not in script
+    assert "console." not in script
 
 
 def test_success_return_accepts_session_storage_token_for_same_purchase(monkeypatch):
