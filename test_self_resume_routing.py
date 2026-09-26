@@ -79,6 +79,45 @@ def setup_main_route(monkeypatch, active_purchase):
     return st_stub, calls
 
 
+def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatch):
+    rendered_html = []
+    rendered_components = []
+    st_stub = SimpleNamespace(
+        session_state=AttrDict(
+            self_resume_url="https://example.test/resume#dummy-token",
+            self_resume_purchase_id="p_self_resume",
+        ),
+        html=lambda value: rendered_html.append(value),
+    )
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(
+        app.components,
+        "html",
+        lambda value, **kwargs: rendered_components.append((value, kwargs)),
+    )
+
+    app.render_self_resume_notice(make_purchase())
+
+    notice_html = rendered_html[0]
+    copy_html, copy_options = rendered_components[0]
+    assert "https://example.test/resume#dummy-token" in notice_html
+    assert "7日間" in notice_html
+    assert "再開期限：" in notice_html
+    assert "鑑定が完了するまでは、この再開URLを保存しておくと安心です。" in notice_html
+    assert "Instagramアプリ内ブラウザなどをご利用の場合" in notice_html
+    assert "お問い合わせ" in notice_html
+    assert f'href="{app.WIX_CONTACT_URL}"' in notice_html
+    assert app.WIX_CONTACT_URL == "https://www.omoshiro-cre8works.com/contact"
+    assert "再開URLをコピー" in copy_html
+    assert 'data-copy-value="https://example.test/resume#dummy-token"' in copy_html
+    assert "navigator.clipboard.writeText(value)" in copy_html
+    assert "await copyResumeUrl(resumeUrl)" in copy_html
+    assert "コピーしました" in copy_html
+    assert "上のURLを選択してコピーしてください。" in copy_html
+    assert copy_options == {"height": 84, "scrolling": False}
+
+
 def test_self_resume_valid_paid_unused_within_window_routes_to_form(monkeypatch):
     _, calls = setup_main_route(monkeypatch, make_purchase())
     monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)

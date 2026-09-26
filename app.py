@@ -112,6 +112,7 @@ PENDING_CHECKOUT_TOKEN_TTL_SECONDS = 2 * 60 * 60
 WIX_REGULAR_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai"
 WIX_SITE_TOP_URL = "https://www.omoshiro-cre8works.com/"
 WIX_REVIEW_LP_URL = "https://www.omoshiro-cre8works.com/ai-uranai/mikaeshibin"
+WIX_CONTACT_URL = "https://www.omoshiro-cre8works.com/contact"
 WIX_CANCEL_URL = os.getenv(
     "WIX_CANCEL_URL",
     WIX_REGULAR_LP_URL,
@@ -2210,18 +2211,25 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
         if expires_text
         else ""
     )
+    safe_resume_url = html.escape(str(resume_url), quote=True)
     st.html(
         f'''
         <div class="self-resume-notice">
             <div class="self-resume-title">途中で閉じても、7日間は続きから再開できます</div>
             <div class="self-resume-body">
                 この鑑定は、決済完了から7日間、この再開URLから続きができます。<br>
-                途中で画面を閉じる場合に備えて、下の再開URLを保存しておいてください。<br>
-                この再開URLは、今回の鑑定を続けるための専用URLです。
+                鑑定が完了するまでは、この再開URLを保存しておくと安心です。<br>
+                画面を閉じる前に、下の再開URLをコピーしておいてください。
             </div>
             {expires_html}
             <div class="self-resume-link-label">再開用リンク</div>
-            <div class="self-resume-link">{html.escape(str(resume_url))}</div>
+            <div class="self-resume-link">{safe_resume_url}</div>
+            <div class="self-resume-note">
+                Instagramアプリ内ブラウザなどをご利用の場合は、画面を閉じる前に再開URLをコピーしておくことをおすすめします。
+            </div>
+            <div class="self-resume-contact">
+                再開URLが分からなくなった場合は、<a href="{html.escape(WIX_CONTACT_URL, quote=True)}" target="_blank" rel="noopener noreferrer">お問い合わせ</a>ください。
+            </div>
         </div>
         <style>
         .self-resume-notice {{
@@ -2274,8 +2282,108 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             border-radius: 8px;
             padding: 0.75rem 0.8rem;
         }}
+        .self-resume-note,
+        .self-resume-contact {{
+            color: #6f625d;
+            font-size: 0.84rem;
+            font-weight: 500;
+            line-height: 1.7;
+            margin-top: 0.7rem;
+        }}
+        .self-resume-contact a {{
+            color: #8a3d24;
+            font-weight: 700;
+        }}
         </style>
         '''
+    )
+    components.html(
+        f'''
+        <button id="copy-self-resume-url" type="button" data-copy-value="{safe_resume_url}">
+            再開URLをコピー
+        </button>
+        <span id="copy-self-resume-status" role="status" aria-live="polite"></span>
+        <script>
+        const copyButton = document.getElementById('copy-self-resume-url');
+        const copyStatus = document.getElementById('copy-self-resume-status');
+
+        const copyWithFallback = (value) => {{
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const copied = document.execCommand('copy');
+            textarea.remove();
+            if (!copied) throw new Error('copy command failed');
+        }};
+
+        const copyResumeUrl = async (value) => {{
+            if (navigator.clipboard && window.isSecureContext) {{
+                try {{
+                    await navigator.clipboard.writeText(value);
+                    return;
+                }} catch (error) {{
+                    copyWithFallback(value);
+                    return;
+                }}
+            }}
+            copyWithFallback(value);
+        }};
+
+        copyButton.addEventListener('click', async () => {{
+            try {{
+                const resumeUrl = copyButton.dataset.copyValue;
+                await copyResumeUrl(resumeUrl);
+                copyStatus.textContent = 'コピーしました';
+                copyStatus.className = 'copy-success';
+            }} catch (error) {{
+                copyStatus.textContent = 'コピーできませんでした。上のURLを選択してコピーしてください。';
+                copyStatus.className = 'copy-error';
+            }}
+        }});
+        </script>
+        <style>
+        body {{
+            align-items: center;
+            margin: 0;
+            color: #333333;
+            display: flex;
+            flex-wrap: wrap;
+            font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+            gap: 0.55rem 0.7rem;
+        }}
+        #copy-self-resume-url {{
+            border: 1px solid #b6552d;
+            border-radius: 8px;
+            background: #b6552d;
+            color: #ffffff;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 700;
+            line-height: 1.4;
+            padding: 0.65rem 1rem;
+        }}
+        #copy-self-resume-url:hover {{
+            background: #984421;
+        }}
+        #copy-self-resume-url:focus-visible {{
+            outline: 2px solid #8a3d24;
+            outline-offset: 2px;
+        }}
+        #copy-self-resume-status {{
+            display: inline-block;
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }}
+        .copy-success {{ color: #3f6f45; }}
+        .copy-error {{ color: #8a3d24; }}
+        </style>
+        ''',
+        height=84,
+        scrolling=False,
     )
 
 
