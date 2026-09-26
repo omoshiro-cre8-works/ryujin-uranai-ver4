@@ -2276,7 +2276,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
         <button id="copy-self-resume-url" type="button" data-copy-value="{safe_resume_url}">
             再開URLをコピー
         </button>
-        <span id="copy-self-resume-status" role="status" aria-live="polite"></span>
+        <span id="copy-self-resume-status" role="status" aria-live="polite" hidden></span>
         <button id="show-self-resume-url" type="button" hidden>再開URLを表示</button>
         <div id="manual-copy-container" hidden></div>
         <script>
@@ -2317,12 +2317,17 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
                 await copyResumeUrl(resumeUrl);
                 copyStatus.textContent = 'コピーしました。メモ帳などに貼り付けて保存してください。';
                 copyStatus.className = 'copy-success';
+                copyStatus.hidden = false;
+                copyButton.hidden = true;
                 showUrlButton.hidden = true;
                 manualCopyContainer.hidden = true;
             }} catch (error) {{
-                copyStatus.textContent = 'コピーできませんでした。再開URLを表示して手動でコピーしてください。';
+                copyStatus.textContent = 'コピーできませんでした。';
                 copyStatus.className = 'copy-error';
+                copyStatus.hidden = false;
+                copyButton.hidden = true;
                 showUrlButton.hidden = false;
+                manualCopyContainer.hidden = true;
             }}
         }});
 
@@ -2333,6 +2338,8 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             manualUrl.readOnly = true;
             manualUrl.value = copyButton.dataset.copyValue;
             manualCopyContainer.replaceChildren(manualUrl);
+            copyButton.hidden = true;
+            copyStatus.hidden = true;
             manualCopyContainer.hidden = false;
             showUrlButton.hidden = true;
             manualUrl.focus();
@@ -2370,7 +2377,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             outline: 2px solid #8a3d24;
             outline-offset: 2px;
         }}
-        #copy-self-resume-status {{
+        #copy-self-resume-status:not([hidden]) {{
             display: inline-block;
             font-size: 0.84rem;
             line-height: 1.5;
@@ -2382,17 +2389,17 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
             box-sizing: border-box;
             color: #333333;
             font-size: 0.8rem;
+            height: 4rem;
             line-height: 1.5;
-            min-height: 4.2rem;
             overflow-wrap: anywhere;
-            resize: vertical;
+            resize: none;
             width: 100%;
         }}
         .copy-success {{ color: #3f6f45; }}
         .copy-error {{ color: #8a3d24; }}
         </style>
         ''',
-        height=160,
+        height=84,
         scrolling=False,
     )
 
