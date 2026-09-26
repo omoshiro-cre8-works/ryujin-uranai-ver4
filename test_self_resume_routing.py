@@ -123,19 +123,35 @@ def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatc
     assert "navigator.clipboard.writeText(value)" in copy_html
     assert "copyWithFallback(value)" in copy_html
     assert "await copyResumeUrl(resumeUrl)" in copy_html
-    assert "コピーしました。メモ帳などに貼り付けて保存してください。" in copy_html
-    assert "コピーできませんでした。再開URLを表示して手動でコピーしてください。" in copy_html
+    assert '<span id="copy-self-resume-status" role="status" aria-live="polite" hidden>' in copy_html
     assert '<button id="show-self-resume-url" type="button" hidden>' in copy_html
     assert '<div id="manual-copy-container" hidden></div>' in copy_html
-    assert "showUrlButton.hidden = false" in copy_html
-    assert "showUrlButton.hidden = true" in copy_html
+    assert """copyStatus.textContent = 'コピーしました。メモ帳などに貼り付けて保存してください。';
+                copyStatus.className = 'copy-success';
+                copyStatus.hidden = false;
+                copyButton.hidden = true;
+                showUrlButton.hidden = true;
+                manualCopyContainer.hidden = true;""" in copy_html
+    assert """copyStatus.textContent = 'コピーできませんでした。';
+                copyStatus.className = 'copy-error';
+                copyStatus.hidden = false;
+                copyButton.hidden = true;
+                showUrlButton.hidden = false;
+                manualCopyContainer.hidden = true;""" in copy_html
     assert "manualUrl.value = copyButton.dataset.copyValue" in copy_html
     assert "manualUrl.setAttribute('aria-label', '手動コピー用の再開URL')" in copy_html
-    assert "manualCopyContainer.hidden = false" in copy_html
+    assert "manualUrl.readOnly = true" in copy_html
+    assert """copyButton.hidden = true;
+            copyStatus.hidden = true;
+            manualCopyContainer.hidden = false;
+            showUrlButton.hidden = true;""" in copy_html
+    assert "manualUrl.focus()" in copy_html
     assert "manualUrl.select()" in copy_html
+    assert "height: 4rem" in copy_html
+    assert "resize: none" in copy_html
     assert "ブックマーク" not in notice_html
     assert "ブックマーク" not in copy_html
-    assert copy_options == {"height": 160, "scrolling": False}
+    assert copy_options == {"height": 84, "scrolling": False}
 
 
 def test_self_resume_valid_paid_unused_within_window_routes_to_form(monkeypatch):
