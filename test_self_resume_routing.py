@@ -129,7 +129,7 @@ def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatc
     assert """copyStatus.textContent = 'コピーしました。メモ帳などに貼り付けて保存してください。';
                 copyStatus.className = 'copy-success';
                 copyStatus.hidden = false;
-                copyButton.hidden = true;
+                copyButton.hidden = false;
                 showUrlButton.hidden = true;
                 manualCopyContainer.hidden = true;""" in copy_html
     assert """copyStatus.textContent = 'コピーできませんでした。';
@@ -147,11 +147,12 @@ def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatc
             showUrlButton.hidden = true;""" in copy_html
     assert "manualUrl.focus()" in copy_html
     assert "manualUrl.select()" in copy_html
+    assert "flex-basis: 100%" in copy_html
     assert "height: 4rem" in copy_html
     assert "resize: none" in copy_html
     assert "ブックマーク" not in notice_html
     assert "ブックマーク" not in copy_html
-    assert copy_options == {"height": 84, "scrolling": False}
+    assert copy_options == {"height": 104, "scrolling": False}
 
 
 def test_self_resume_valid_paid_unused_within_window_routes_to_form(monkeypatch):
