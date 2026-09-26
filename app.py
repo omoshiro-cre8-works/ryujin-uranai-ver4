@@ -2318,7 +2318,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
                 copyStatus.textContent = 'コピーしました。メモ帳などに貼り付けて保存してください。';
                 copyStatus.className = 'copy-success';
                 copyStatus.hidden = false;
-                copyButton.hidden = true;
+                copyButton.hidden = false;
                 showUrlButton.hidden = true;
                 manualCopyContainer.hidden = true;
             }} catch (error) {{
@@ -2379,6 +2379,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
         }}
         #copy-self-resume-status:not([hidden]) {{
             display: inline-block;
+            flex-basis: 100%;
             font-size: 0.84rem;
             line-height: 1.5;
         }}
@@ -2399,7 +2400,7 @@ def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:
         .copy-error {{ color: #8a3d24; }}
         </style>
         ''',
-        height=84,
+        height=104,
         scrolling=False,
     )
 
