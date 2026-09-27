@@ -1356,6 +1356,29 @@ def read_fragment_token_from_browser(purchase_id: str) -> tuple[str | None, str]
     return None, status
 
 
+def prepare_self_resume_token_for_browser(
+    purchase_id: str,
+    access_token: str,
+) -> bool | None:
+    if not purchase_id or not access_token:
+        return False
+
+    payload = mount_token_bridge(
+        "store",
+        purchase_id=purchase_id,
+        token=access_token,
+        key_suffix=f"self_resume_store_{purchase_id}",
+        storage_prefix=SELF_RESUME_TOKEN_STORAGE_PREFIX,
+        ttl_seconds=SELF_RESUME_TOKEN_TTL_SECONDS,
+    )
+    status = str(payload.get("status") or "")
+    if status == "stored" and payload.get("purchase_id") == purchase_id:
+        return True
+    if status == "error":
+        return False
+    return None
+
+
 def build_uploaded_files_signature(uploaded_files: list[Any]) -> str | None:
     if not uploaded_files:
         return None
@@ -2140,7 +2163,6 @@ def get_current_purchase_record() -> dict[str, Any] | None:
     legacy_query_access_token = get_query_param_value("access_token")
     purchase_id = get_query_param_value("purchase_id")
     action = (get_query_param_value("action") or "").strip().lower()
-    should_clean_purchase_query = False
     reset_purchase_token_status()
     if session_id:
         synced_record = sync_purchase_from_session(str(session_id), logging.getLogger(__name__))
@@ -2176,10 +2198,19 @@ def get_current_purchase_record() -> dict[str, Any] | None:
                     get_purchase_product_type(synced_record),
                 )
                 st.session_state.self_resume_purchase_id = synced_purchase_id
-                cleanup_pending_checkout_token(synced_purchase_id, reason="success")
-                should_clean_purchase_query = bool(session_id or purchase_id or get_query_param_value("product_type"))
-                if should_clean_purchase_query:
-                    clean_purchase_query_params()
+                self_resume_storage_ready = prepare_self_resume_token_for_browser(
+                    synced_purchase_id,
+                    access_token,
+                )
+                if self_resume_storage_ready is None:
+                    mark_purchase_token_pending("self_resume_storage")
+                    return None
+                if self_resume_storage_ready:
+                    cleanup_pending_checkout_token(synced_purchase_id, reason="success")
+                    normalize_self_resume_query_params(
+                        synced_purchase_id,
+                        get_purchase_product_type(synced_record),
+                    )
                 return synced_record
 
             mark_purchase_token_auth_failed()
@@ -2240,6 +2271,13 @@ def clean_purchase_query_params(*, preserve_resume: bool = False) -> None:
     st.query_params.clear()
     for key, value in remaining_params.items():
         st.query_params[key] = value
+
+
+def normalize_self_resume_query_params(purchase_id: str, product_type: str) -> None:
+    clean_purchase_query_params()
+    st.query_params["purchase_id"] = purchase_id
+    st.query_params["product_type"] = normalize_product_type(product_type)
+    st.query_params["action"] = "resume"
 
 
 def render_self_resume_notice(active_purchase: dict[str, Any]) -> None:

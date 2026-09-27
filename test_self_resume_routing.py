@@ -370,28 +370,173 @@ def test_self_resume_fragment_bridge_stores_before_cleanup_without_long_lived_st
     assert "console." not in script
 
 
+def test_checkout_success_store_uses_self_resume_prefix_and_ttl(monkeypatch):
+    captured = {}
+
+    def mount(action, **kwargs):
+        captured["action"] = action
+        captured.update(kwargs)
+        return {"status": "stored", "purchase_id": "p_success"}
+
+    monkeypatch.setattr(app, "mount_token_bridge", mount)
+
+    assert app.prepare_self_resume_token_for_browser("p_success", "dummy_token") is True
+    assert captured == {
+        "action": "store",
+        "purchase_id": "p_success",
+        "token": "dummy_token",
+        "key_suffix": "self_resume_store_p_success",
+        "storage_prefix": app.SELF_RESUME_TOKEN_STORAGE_PREFIX,
+        "ttl_seconds": app.SELF_RESUME_TOKEN_TTL_SECONDS,
+    }
+
+
 def test_success_return_accepts_session_storage_token_for_same_purchase(monkeypatch):
     st_stub = make_streamlit_stub()
     st_stub.query_params = {
         "session_id": "cs_test_1",
         "purchase_id": "p_success",
         "product_type": app.PRODUCT_TYPE_REGULAR,
+        "test_mode": "owner",
     }
-    cleanups = []
+    events = []
     purchase = make_purchase(purchase_id="p_success")
 
     monkeypatch.setattr(app, "st", st_stub)
     monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
     monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("token_success", "received"))
     monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_success"})
-    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)))
+    monkeypatch.setattr(
+        app,
+        "prepare_self_resume_token_for_browser",
+        lambda purchase_id, token: events.append(("store", purchase_id, token)) or True,
+    )
+    monkeypatch.setattr(
+        app,
+        "cleanup_pending_checkout_token",
+        lambda purchase_id, reason="done": events.append(("cleanup", purchase_id, reason)),
+    )
 
     assert app.get_current_purchase_record() == purchase
     assert st_stub.session_state.active_purchase_id == "p_success"
     assert st_stub.session_state.active_access_token == "token_success"
     assert "access_token" not in st_stub.query_params
-    assert st_stub.query_params == {}
-    assert cleanups == [("p_success", "success")]
+    assert "session_id" not in st_stub.query_params
+    assert st_stub.query_params == {
+        "test_mode": "owner",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+        "action": "resume",
+    }
+    assert events == [
+        ("store", "p_success", "token_success"),
+        ("cleanup", "p_success", "success"),
+    ]
+
+
+def test_success_return_waits_for_self_resume_storage_before_cleanup(monkeypatch):
+    st_stub = make_streamlit_stub()
+    st_stub.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    purchase = make_purchase(purchase_id="p_success")
+    cleanups = []
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("token_success", "received"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_success"})
+    monkeypatch.setattr(app, "prepare_self_resume_token_for_browser", lambda purchase_id, token: None)
+    monkeypatch.setattr(
+        app,
+        "cleanup_pending_checkout_token",
+        lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)),
+    )
+
+    assert app.get_current_purchase_record() is None
+    assert st_stub.session_state.purchase_token_pending is True
+    assert st_stub.session_state.purchase_token_pending_reason == "self_resume_storage"
+    assert st_stub.query_params["session_id"] == "cs_test_1"
+    assert st_stub.query_params["purchase_id"] == "p_success"
+    assert cleanups == []
+
+
+def test_success_return_storage_failure_keeps_checkout_recovery_state(monkeypatch):
+    st_stub = make_streamlit_stub()
+    original_query = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    st_stub.query_params = dict(original_query)
+    purchase = make_purchase(purchase_id="p_success")
+    cleanups = []
+
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("token_success", "received"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda token: {"purchase_id": "p_success"})
+    monkeypatch.setattr(app, "prepare_self_resume_token_for_browser", lambda purchase_id, token: False)
+    monkeypatch.setattr(
+        app,
+        "cleanup_pending_checkout_token",
+        lambda purchase_id, reason="done": cleanups.append((purchase_id, reason)),
+    )
+
+    assert app.get_current_purchase_record() == purchase
+    assert st_stub.query_params == original_query
+    assert cleanups == []
+
+
+def test_checkout_success_then_new_session_reload_uses_self_resume_storage(monkeypatch):
+    purchase = make_purchase(purchase_id="p_success")
+    stored_tokens = {}
+    validated_tokens = []
+
+    first_session = make_streamlit_stub()
+    first_session.query_params = {
+        "session_id": "cs_test_1",
+        "purchase_id": "p_success",
+        "product_type": app.PRODUCT_TYPE_REGULAR,
+    }
+    monkeypatch.setattr(app, "st", first_session)
+    monkeypatch.setattr(app, "sync_purchase_from_session", lambda session_id, logger: purchase)
+    monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda purchase_id: ("token_success", "received"))
+    monkeypatch.setattr(
+        app,
+        "prepare_self_resume_token_for_browser",
+        lambda purchase_id, token: stored_tokens.setdefault(purchase_id, token) is not None,
+    )
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda purchase_id, reason="done": None)
+    monkeypatch.setattr(
+        app,
+        "get_purchase_by_access_token",
+        lambda token: validated_tokens.append(token) or purchase,
+    )
+
+    assert app.get_current_purchase_record() == purchase
+    reload_query = dict(first_session.query_params)
+
+    reloaded_session = make_streamlit_stub()
+    reloaded_session.query_params = reload_query
+    monkeypatch.setattr(app, "st", reloaded_session)
+    monkeypatch.setattr(
+        app,
+        "sync_purchase_from_session",
+        lambda session_id, logger: pytest.fail("reload must not use checkout session"),
+    )
+    monkeypatch.setattr(
+        app,
+        "read_fragment_token_from_browser",
+        lambda purchase_id: (stored_tokens[purchase_id], "received"),
+    )
+
+    assert app.get_current_purchase_record() == purchase
+    assert validated_tokens == ["token_success", "token_success"]
+    assert reloaded_session.session_state.active_purchase_id == "p_success"
+    assert reloaded_session.query_params == reload_query
 
 
 def test_success_return_rejects_query_purchase_mismatch(monkeypatch):
