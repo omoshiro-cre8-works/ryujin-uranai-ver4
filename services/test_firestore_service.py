@@ -928,7 +928,8 @@ def test_create_purchase_record_saves_tracking_params_without_private_fields(mon
     assert "pdf_body" not in payload
 
 
-def test_create_purchase_record_saves_entry_and_ga4_observation_without_ids(monkeypatch):
+@pytest.mark.parametrize("button_position", ["sample_top", "sample_bottom"])
+def test_create_purchase_record_saves_entry_and_ga4_observation_without_ids(monkeypatch, button_position):
     client = FakeFirestoreClient()
     monkeypatch.setattr(firestore_service, "get_firestore_client", lambda: client)
 
@@ -945,7 +946,7 @@ def test_create_purchase_record_saves_entry_and_ga4_observation_without_ids(monk
             "entry_utm_campaign": "summer",
             "entry_utm_content": "lp_e_ad",
             "current_lp": "lp_e",
-            "button_position": "sample_bottom",
+            "button_position": button_position,
             "ga4_client_id_received": True,
             "ga4_session_id_received": True,
             "ga4_client_id_source": "wix",
@@ -964,7 +965,7 @@ def test_create_purchase_record_saves_entry_and_ga4_observation_without_ids(monk
     assert payload["entry_utm_campaign"] == "summer"
     assert payload["entry_utm_content"] == "lp_e_ad"
     assert payload["current_lp"] == "lp_e"
-    assert payload["button_position"] == "sample_bottom"
+    assert payload["button_position"] == button_position
     assert payload["ga4_client_id_received"] is True
     assert payload["ga4_session_id_received"] is True
     assert payload["ga4_client_id_source"] == "wix"
