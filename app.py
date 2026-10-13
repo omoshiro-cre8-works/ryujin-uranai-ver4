@@ -197,7 +197,7 @@ SUCCESS_URL_TRACKING_KEYS = (
     "button_position",
 )
 VALID_TEST_MODES = {"owner", "none"}
-VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "sample_bottom", "unknown"}
+VALID_BUTTON_POSITIONS = {"top", "middle", "bottom", "sample_top", "sample_bottom", "unknown"}
 BUTTON_POSITION_ALIASES = {
     "first_view": "top",
     "hero": "top",
@@ -206,6 +206,7 @@ BUTTON_POSITION_ALIASES = {
     "sumple_after": "middle",
     "middle": "middle",
     "bottom": "bottom",
+    "sample_top": "sample_top",
     "sample_bottom": "sample_bottom",
 }
 GA4_SENSITIVE_QUERY_PARAMS = {"session_id", "purchase_id", "access_token"}

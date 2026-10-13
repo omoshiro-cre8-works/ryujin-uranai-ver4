@@ -2,6 +2,7 @@ import urllib.parse
 from types import SimpleNamespace
 
 import app
+import pytest
 
 
 def test_direct_checkout_accepts_regular_and_review():
@@ -1393,3 +1394,125 @@ def test_success_url_includes_ga4_identifiers_when_present(monkeypatch):
     assert "session_id={CHECKOUT_SESSION_ID}" in url
     assert "ga4_client_id=1498719245.1765352125" in url
     assert "ga4_session_id=1786245136" in url
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("sample_top", "sample_top"), ("SAMPLE_TOP", "sample_top"),
+    (" sample_top ", "sample_top"), ("sample_bottom", "sample_bottom"),
+    ("top", "top"), ("middle", "middle"), ("bottom", "bottom"),
+    ("hero", "top"), ("first_view", "top"),
+    ("sample_after", "middle"), ("sumple_after", "middle"),
+    (None, "unknown"), ("", "unknown"), ("side", "unknown"),
+])
+def test_sample_top_normalization_and_compatibility(value, expected):
+    assert app.normalize_button_position(value) == expected
+
+
+@pytest.mark.parametrize("button, content, expected", [
+    ("hero", "bottom", "top"), ("invalid", "middle", "middle"),
+    ("", "invalid", "unknown"),
+])
+def test_invalid_position_keeps_query_fallback(monkeypatch, button, content, expected):
+    monkeypatch.setattr(app, "st", SimpleNamespace(query_params={
+        "button_position": "invalid", "button": button, "utm_content": content,
+    }))
+    assert app.get_tracking_params_from_query()["button_position"] == expected
+
+
+@pytest.mark.parametrize("position", ["sample_top", "sample_bottom"])
+def test_regular_sample_tracking_path(monkeypatch, position):
+    import json
+    from services import ga4_service
+
+    tracking = {
+        "product_type": "regular", "button_position": position,
+        "utm_source": "wix", "utm_medium": "lp", "utm_campaign": "sample",
+        "utm_content": "sample_popup", "entry_lp": "lp_a", "current_lp": "lp_a",
+        "entry_utm_source": "wix", "entry_utm_medium": "lp",
+        "entry_utm_campaign": "sample", "entry_utm_content": "sample_popup",
+        "test_mode": "owner",
+    }
+    state = AttrDict(ga4_client_id="test-client", ga4_session_id="123")
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=state, query_params=tracking))
+    monkeypatch.setattr(app, "APP_BASE_URL", "https://app.example")
+    assert app.get_tracking_params_from_query() == {"service_id": app.SERVICE_ID, **tracking}
+    app.update_tracking_session_state_from_query()
+    saved = {}
+    monkeypatch.setattr(app, "firestore_create_purchase_record", lambda **kwargs: saved.update(kwargs))
+    monkeypatch.setattr(app, "update_purchase_record", lambda purchase_id, **kwargs: {"purchase_id": purchase_id})
+    monkeypatch.setattr(app, "stripe_client_ready", lambda product_type: True)
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_CAMPAIGN", "")
+    monkeypatch.setattr(app, "CAMPAIGN_END_AT", "")
+    checkout = {}
+    monkeypatch.setattr(app, "stripe", SimpleNamespace(checkout=SimpleNamespace(Session=SimpleNamespace(
+        create=lambda **kwargs: checkout.update(kwargs) or SimpleNamespace(id="cs_test", url="https://checkout.example"),
+    ))))
+    payloads = []
+
+    class Response:
+        status = 204
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        payloads.append(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr(ga4_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(app, "GA4_ENABLED", True)
+    monkeypatch.setattr(app, "GA4_MEASUREMENT_ID", "G-TEST")
+    monkeypatch.setattr(app, "GA4_API_SECRET", "test-placeholder")
+    logger = SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None)
+    url, error = app.create_checkout_session("regular", logger)
+    assert error is None
+    assert url == "https://checkout.example"
+    assert checkout["line_items"] == [{"price": "price_regular_test", "quantity": 1}]
+    assert checkout["metadata"]["amount_jpy"] == "500"
+    assert saved["amount_jpy"] == 500
+    success = urllib.parse.parse_qs(urllib.parse.urlparse(checkout["success_url"]).query)
+    for key, value in tracking.items():
+        assert saved["tracking_params"][key] == value
+        assert checkout["metadata"][key] == value
+        assert success[key] == [value]
+        assert payloads[0]["events"][0]["params"][key] == value
+    app.st.query_params = {}
+    state.update(button_position="unknown")
+    restored = app.restore_tracking_params(saved["tracking_params"], {"button_position": "bottom"})
+    for key, value in tracking.items():
+        assert restored[key] == value
+        assert state[key] == value
+    assert app.track_ga4_event("reading_started", logger)
+    assert payloads[-1]["events"][0]["params"]["button_position"] == position
+
+
+@pytest.mark.parametrize("source", ["record", "metadata", "url"])
+def test_sample_top_tracking_restore_sources(monkeypatch, source):
+    state = AttrDict(product_type="regular", button_position="bottom")
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=state, query_params={}))
+    record = {"product_type": "regular"}
+    metadata = {}
+    if source == "record":
+        record["button_position"] = "sample_top"
+        metadata["button_position"] = "middle"
+    elif source == "metadata":
+        metadata["button_position"] = "sample_top"
+        app.st.query_params = {"button_position": "middle"}
+    else:
+        app.st.query_params = {"button_position": "sample_top"}
+    assert app.restore_tracking_params(record, metadata)["button_position"] == "sample_top"
+    assert state["button_position"] == "sample_top"
+
+
+def test_sample_top_keeps_regular_campaign_price_selection(monkeypatch):
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=AttrDict(button_position="sample_top")))
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_REGULAR", "price_regular_test")
+    monkeypatch.setattr(app, "STRIPE_PRICE_ID_CAMPAIGN", "price_campaign_test")
+    now = app.datetime.datetime(2026, 10, 13, tzinfo=app.datetime.timezone.utc)
+    monkeypatch.setattr(app, "utc_now", lambda: now)
+    monkeypatch.setattr(app, "CAMPAIGN_END_AT", "2026-10-14T00:00:00Z")
+    assert app.get_active_checkout_price("regular") == ("price_campaign_test", app.CAMPAIGN_AMOUNT_JPY)
+    monkeypatch.setattr(app, "CAMPAIGN_END_AT", "2026-10-12T00:00:00Z")
+    assert app.get_active_checkout_price("regular") == ("price_regular_test", 500)
