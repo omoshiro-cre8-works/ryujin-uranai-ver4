@@ -4,29 +4,9 @@ import sys
 import types
 from types import SimpleNamespace
 
+import flask  # noqa: F401
+import pytest
 
-if "flask" not in sys.modules:
-    try:
-        import flask  # noqa: F401
-    except ImportError:
-        class FakeFlask:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def get(self, *args, **kwargs):
-                return lambda func: func
-
-            def post(self, *args, **kwargs):
-                return lambda func: func
-
-            def run(self, *args, **kwargs):
-                pass
-
-        flask_module = types.ModuleType("flask")
-        flask_module.Flask = FakeFlask
-        flask_module.jsonify = lambda *args, **kwargs: args[0] if args else kwargs
-        flask_module.request = SimpleNamespace(get_data=lambda: b"", headers={})
-        sys.modules["flask"] = flask_module
 
 if "stripe" not in sys.modules:
     try:
@@ -57,6 +37,17 @@ from stripe_webhook import stripe_webhook_app
 DUMMY_LIVE_KEY = "sk_live_dummy_pr6_not_real"
 DUMMY_TEST_KEY = "sk_test_dummy_pr6_not_real"
 DUMMY_WEBHOOK_SECRET = "whsec_dummy_pr6_not_real"
+
+
+RAW_WEBHOOK_BODY = b'{"test": "webhook"}'
+DUMMY_SIGNATURE = "test-signature"
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setitem(stripe_webhook_app.app.config, "TESTING", True)
+    with stripe_webhook_app.app.test_client() as test_client:
+        yield test_client
 
 
 def purchase_record() -> dict:
@@ -190,7 +181,7 @@ def test_paid_session_with_purchase_id_mismatch_is_not_marked_paid(monkeypatch) 
     assert updates == []
 
 
-def test_production_webhook_compat_healthcheck_succeeds(monkeypatch) -> None:
+def test_production_webhook_compat_healthcheck_succeeds(monkeypatch, client) -> None:
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("STRIPE_MODE", raising=False)
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
@@ -200,13 +191,15 @@ def test_production_webhook_compat_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_LIVE_KEY)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert response["collection"] == "purchases"
 
 
-def test_explicit_production_healthcheck_succeeds(monkeypatch) -> None:
+def test_explicit_production_healthcheck_succeeds(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.delenv("STRIPE_MODE", raising=False)
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
@@ -216,13 +209,15 @@ def test_explicit_production_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_LIVE_KEY)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert response["collection"] == "purchases"
 
 
-def test_production_healthcheck_rejects_test_api_key_if_present(monkeypatch) -> None:
+def test_production_healthcheck_rejects_test_api_key_if_present(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.delenv("STRIPE_MODE", raising=False)
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
@@ -232,14 +227,15 @@ def test_production_healthcheck_rejects_test_api_key_if_present(monkeypatch) -> 
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", DUMMY_TEST_KEY)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response, status = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert response == {"status": "error", "error": "configuration invalid"}
     assert DUMMY_TEST_KEY not in str(response)
 
 
-def test_production_healthcheck_succeeds_without_api_key(monkeypatch) -> None:
+def test_production_healthcheck_succeeds_without_api_key(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.delenv("STRIPE_MODE", raising=False)
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
@@ -249,13 +245,15 @@ def test_production_healthcheck_succeeds_without_api_key(monkeypatch) -> None:
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", "")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert response["collection"] == "purchases"
 
 
-def test_staging_healthcheck_succeeds(monkeypatch) -> None:
+def test_staging_healthcheck_succeeds(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "dummy-staging-project-pr6")
@@ -265,13 +263,15 @@ def test_staging_healthcheck_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_SECRET_KEY", "")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert response["collection"] == "purchases"
 
 
-def test_local_healthcheck_succeeds_without_firestore_project(monkeypatch) -> None:
+def test_local_healthcheck_succeeds_without_firestore_project(monkeypatch, client) -> None:
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("K_SERVICE", raising=False)
     monkeypatch.delenv("FIRESTORE_PROJECT_ID", raising=False)
@@ -279,36 +279,40 @@ def test_local_healthcheck_succeeds_without_firestore_project(monkeypatch) -> No
     monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "dummy_local_pr6")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert response["collection"] == "dummy_local_pr6"
 
 
-def test_staging_webhook_without_app_env_fails_healthcheck(monkeypatch) -> None:
+def test_staging_webhook_without_app_env_fails_healthcheck(monkeypatch, client) -> None:
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response, status = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert response["status"] == "error"
     assert response["error"] == "configuration invalid"
 
 
-def test_unknown_cloud_run_service_fails_healthcheck(monkeypatch) -> None:
+def test_unknown_cloud_run_service_fails_healthcheck(monkeypatch, client) -> None:
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.setenv("K_SERVICE", "unknown-cloud-run-service-pr6")
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
 
-    response, status = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert response == {"status": "error", "error": "configuration invalid"}
 
 
-def test_staging_healthcheck_fails_closed_for_firestore_settings(monkeypatch) -> None:
+def test_staging_healthcheck_fails_closed_for_firestore_settings(monkeypatch, client) -> None:
     base_env = {
         "APP_ENV": "staging",
         "K_SERVICE": "ai-uranai-webhook-staging",
@@ -332,13 +336,14 @@ def test_staging_healthcheck_fails_closed_for_firestore_settings(monkeypatch) ->
             else:
                 monkeypatch.setenv(key, value)
 
-        response, status = stripe_webhook_app.healthcheck()
+        http_response = client.get("/")
+        response = http_response.get_json()
 
-        assert status == 500
+        assert http_response.status_code == 500
         assert response == {"status": "error", "error": "configuration invalid"}
 
 
-def test_staging_healthcheck_fails_closed_for_stripe_settings(monkeypatch) -> None:
+def test_staging_healthcheck_fails_closed_for_stripe_settings(monkeypatch, client) -> None:
     base_env = {
         "APP_ENV": "staging",
         "K_SERVICE": "ai-uranai-webhook-staging",
@@ -362,14 +367,15 @@ def test_staging_healthcheck_fails_closed_for_stripe_settings(monkeypatch) -> No
                 monkeypatch.setenv(key, value)
         monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", webhook_secret)
 
-        response, status = stripe_webhook_app.healthcheck()
+        http_response = client.get("/")
+        response = http_response.get_json()
 
-        assert status == 500
+        assert http_response.status_code == 500
         assert response == {"status": "error", "error": "configuration invalid"}
         assert DUMMY_WEBHOOK_SECRET not in str(response)
 
 
-def test_healthcheck_has_no_external_client_or_stripe_api_key_side_effect(monkeypatch) -> None:
+def test_healthcheck_has_no_external_client_or_stripe_api_key_side_effect(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "dummy-staging-project-pr6")
@@ -384,13 +390,15 @@ def test_healthcheck_has_no_external_client_or_stripe_api_key_side_effect(monkey
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("Firestore client created")),
     )
 
-    response = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
+    assert http_response.status_code == 200
     assert response["status"] == "ok"
     assert stripe_webhook_app.stripe.api_key == "sentinel"
 
 
-def test_healthcheck_logs_generic_config_error_without_webhook_secret(monkeypatch, caplog) -> None:
+def test_healthcheck_logs_generic_config_error_without_webhook_secret(monkeypatch, caplog, client) -> None:
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "dummy-staging-project-pr6")
@@ -400,9 +408,10 @@ def test_healthcheck_logs_generic_config_error_without_webhook_secret(monkeypatc
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", "")
     caplog.set_level(logging.ERROR, logger=stripe_webhook_app.logger.name)
 
-    response, status = stripe_webhook_app.healthcheck()
+    http_response = client.get("/")
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert response == {"status": "error", "error": "configuration invalid"}
     assert "webhook_health_configuration_invalid" in caplog.text
     assert any(getattr(record, "component", None) == "stripe" for record in caplog.records)
@@ -445,19 +454,25 @@ def test_production_webhook_compat_uses_existing_firestore_defaults(monkeypatch)
     ]
 
 
-def test_webhook_does_not_set_stripe_api_key_when_config_invalid(monkeypatch) -> None:
+def test_webhook_does_not_set_stripe_api_key_when_config_invalid(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.delenv("STRIPE_MODE", raising=False)
     monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", "whsec_placeholder")
     monkeypatch.setattr(stripe_webhook_app.stripe, "api_key", None)
 
-    response, status = stripe_webhook_app.stripe_webhook()
+    http_response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert stripe_webhook_app.stripe.api_key is None
 
 
-def test_webhook_unsupported_event_uses_signature_validation_and_skips_firestore(monkeypatch) -> None:
+def test_webhook_unsupported_event_uses_signature_validation_and_skips_firestore(monkeypatch, client) -> None:
     client_calls = []
     construct_calls = []
 
@@ -477,16 +492,26 @@ def test_webhook_unsupported_event_uses_signature_validation_and_skips_firestore
         lambda **kwargs: client_calls.append(kwargs),
     )
 
-    response, status = stripe_webhook_app.stripe_webhook()
+    http_response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+    response = http_response.get_json()
 
-    assert status == 200
+    assert http_response.status_code == 200
     assert response["ignored_event_type"] == "customer.created"
     assert len(construct_calls) == 1
-    assert construct_calls[0]["secret"] == "whsec_placeholder"
+    assert construct_calls[0] == {
+        "payload": RAW_WEBHOOK_BODY,
+        "sig_header": DUMMY_SIGNATURE,
+        "secret": "whsec_placeholder",
+    }
     assert client_calls == []
 
 
-def test_webhook_completed_event_without_api_key_uses_signature_secret(monkeypatch) -> None:
+def test_webhook_completed_event_without_api_key_uses_signature_secret(monkeypatch, client) -> None:
     handled_calls = []
     construct_calls = []
 
@@ -514,17 +539,34 @@ def test_webhook_completed_event_without_api_key_uses_signature_secret(monkeypat
         lambda session, event_id: handled_calls.append((session, event_id)) or True,
     )
 
-    response, status = stripe_webhook_app.stripe_webhook()
+    http_response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+    response = http_response.get_json()
 
-    assert status == 200
+    assert http_response.status_code == 200
     assert response == {"received": True, "handled": True}
     assert len(construct_calls) == 1
-    assert construct_calls[0]["secret"] == "whsec_placeholder"
+    assert construct_calls[0] == {
+        "payload": RAW_WEBHOOK_BODY,
+        "sig_header": DUMMY_SIGNATURE,
+        "secret": "whsec_placeholder",
+    }
     assert handled_calls == [(checkout_session(), "evt_1")]
     assert stripe_webhook_app.stripe.api_key == "sentinel"
 
 
-def test_webhook_invalid_signature_is_rejected_without_api_key(monkeypatch) -> None:
+def test_webhook_invalid_signature_is_rejected_without_api_key(monkeypatch, client) -> None:
+    construct_calls = []
+    updates = []
+    monkeypatch.setattr(
+        stripe_webhook_app,
+        "update_purchase_record",
+        lambda purchase_id, **kwargs: updates.append((purchase_id, kwargs)),
+    )
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
     monkeypatch.setenv("FIRESTORE_PROJECT_ID", "dummy-staging-project-pr6")
@@ -536,19 +578,31 @@ def test_webhook_invalid_signature_is_rejected_without_api_key(monkeypatch) -> N
     monkeypatch.setattr(
         stripe_webhook_app.stripe.Webhook,
         "construct_event",
-        lambda **kwargs: (_ for _ in ()).throw(
+        lambda **kwargs: construct_calls.append(kwargs) or (_ for _ in ()).throw(
             stripe_webhook_app.stripe.error.SignatureVerificationError("bad signature", "")
         ),
     )
 
-    response, status = stripe_webhook_app.stripe_webhook()
+    http_response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+    response = http_response.get_json()
 
-    assert status == 400
+    assert construct_calls == [{
+        "payload": RAW_WEBHOOK_BODY,
+        "sig_header": DUMMY_SIGNATURE,
+        "secret": "whsec_placeholder",
+    }]
+    assert updates == []
+    assert http_response.status_code == 400
     assert response == {"error": "invalid signature"}
     assert stripe_webhook_app.stripe.api_key == "sentinel"
 
 
-def test_webhook_completed_event_returns_config_error_without_secret(monkeypatch) -> None:
+def test_webhook_completed_event_returns_config_error_without_secret(monkeypatch, client) -> None:
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.delenv("FIRESTORE_DATABASE_ID", raising=False)
     monkeypatch.setenv("STRIPE_MODE", "test")
@@ -570,8 +624,69 @@ def test_webhook_completed_event_returns_config_error_without_secret(monkeypatch
         },
     )
 
-    response, status = stripe_webhook_app.stripe_webhook()
+    http_response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+    response = http_response.get_json()
 
-    assert status == 500
+    assert http_response.status_code == 500
     assert "FIRESTORE_PROJECT_ID" in response["error"] or "FIRESTORE_DATABASE_ID" in response["error"]
     assert "whsec_placeholder" not in str(response)
+
+
+def test_duplicate_webhook_event_returns_success_without_updating_purchase(monkeypatch, client) -> None:
+    record = purchase_record()
+    record["payment_status"] = "paid"
+    record["stripe_event_id"] = "evt_1"
+    original_record = record.copy()
+    updates = []
+    construct_calls = []
+    read_calls = []
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("K_SERVICE", "ai-uranai-webhook-staging")
+    monkeypatch.setenv("FIRESTORE_PROJECT_ID", "dummy-staging-project-pr6")
+    monkeypatch.setenv("FIRESTORE_DATABASE_ID", "ryujin-staging")
+    monkeypatch.setenv("FIRESTORE_COLLECTION_NAME", "purchases")
+    monkeypatch.setenv("STRIPE_MODE", "test")
+    monkeypatch.setattr(stripe_webhook_app, "STRIPE_WEBHOOK_SECRET", DUMMY_WEBHOOK_SECRET)
+    monkeypatch.setattr(
+        stripe_webhook_app.stripe.Webhook,
+        "construct_event",
+        lambda **kwargs: construct_calls.append(kwargs) or {
+            "type": "checkout.session.completed",
+            "id": "evt_1",
+            "data": {"object": checkout_session()},
+        },
+    )
+    monkeypatch.setattr(
+        stripe_webhook_app,
+        "get_purchase_record",
+        lambda purchase_id: read_calls.append(purchase_id) or record,
+    )
+    monkeypatch.setattr(
+        stripe_webhook_app,
+        "update_purchase_record",
+        lambda purchase_id, **kwargs: updates.append((purchase_id, kwargs)),
+    )
+
+    response = client.post(
+        "/stripe/webhook",
+        data=RAW_WEBHOOK_BODY,
+        headers={"Stripe-Signature": DUMMY_SIGNATURE},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"received": True, "handled": True}
+    assert construct_calls == [{
+        "payload": RAW_WEBHOOK_BODY,
+        "sig_header": DUMMY_SIGNATURE,
+        "secret": DUMMY_WEBHOOK_SECRET,
+    }]
+    assert read_calls == [record["purchase_id"]]
+    assert updates == []
+    assert record == original_record
