@@ -361,7 +361,18 @@ def test_review_direct_checkout_uses_review_product_and_minimal_screen(monkeypat
     assert any("見返し便フォーム" in value for value in rendered_info)
 
 
-def test_main_root_fallback_disables_checkout_creation(monkeypatch):
+@pytest.mark.parametrize("query, state, clear_query, expect_guidance", [
+    ({}, {}, False, True),
+    ({"session_id": "cs_test"}, {}, True, False),
+    ({"action": "resume", "purchase_id": "p_test"}, {}, True, False),
+    ({"utm_source": "wix"}, {}, False, False),
+    *[({}, {key: "pending"}, True, False) for key in (
+        "checkout_url", "checkout_product_type", "checkout_token_stored_purchase_id",
+        "checkout_token_storage_failed", "active_purchase_id", "active_access_token",
+        "self_resume_purchase_id", "self_resume_url",
+    )],
+])
+def test_main_root_fallback_disables_checkout_creation(monkeypatch, query, state, clear_query, expect_guidance):
     calls = []
 
     monkeypatch.setattr(app, "configure_logging", lambda: None)
@@ -372,12 +383,23 @@ def test_main_root_fallback_disables_checkout_creation(monkeypatch):
     monkeypatch.setattr(app, "update_tracking_session_state_from_query", lambda: None)
     monkeypatch.setattr(app, "has_purchase_return_query_params", lambda: False)
     monkeypatch.setattr(app, "is_direct_checkout_request", lambda: False)
-    monkeypatch.setattr(app, "get_current_purchase_record", lambda: None)
+    def get_record():
+        if clear_query:
+            app.st.query_params.clear()
+            app.st.session_state.clear()
+        return None
+
+    monkeypatch.setattr(app, "get_current_purchase_record", get_record)
     monkeypatch.setattr(app, "get_requested_product_type", lambda: app.PRODUCT_TYPE_REGULAR)
     monkeypatch.setattr(app, "track_streamlit_page_view", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_header", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_notice_box", lambda *args, **kwargs: None)
     monkeypatch.setattr(app, "render_form_gap", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *args: None)
+    monkeypatch.setattr(app, "render_irregular_access_guidance", lambda: calls.append(("guidance",)))
+    for name in ("create_checkout_session", "update_purchase_record", "firestore_create_purchase_record",
+                 "render_fortune_form", "render_review_fortune_form", "render_pdf_recovery_screen"):
+        monkeypatch.setattr(app, name, lambda *args, **kwargs: pytest.fail("Unexpected purchase operation"))
     monkeypatch.setattr(
         app,
         "render_payment_section",
@@ -397,12 +419,61 @@ def test_main_root_fallback_disables_checkout_creation(monkeypatch):
             set_page_config=lambda *args, **kwargs: None,
             info=lambda *args, **kwargs: None,
             divider=lambda *args, **kwargs: None,
+            query_params=dict(query),
+            session_state=dict(state),
         ),
     )
 
     app.main()
 
-    assert calls == [("payment_section", app.PRODUCT_TYPE_REGULAR, False)]
+    assert calls == ([("guidance",)] if expect_guidance else [("payment_section", app.PRODUCT_TYPE_REGULAR, False)])
+
+
+def test_irregular_guidance_content_and_links(monkeypatch):
+    from html.parser import HTMLParser
+
+    class GuidanceParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.links = []
+            self.headings = []
+            self.text = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                self.links.append(dict(attrs)["href"])
+            if tag in {"h1", "h2"}:
+                self.headings.append(tag)
+
+        def handle_data(self, data):
+            self.text.append(data)
+
+    rendered = []
+    monkeypatch.setattr(app, "st", SimpleNamespace(html=rendered.append))
+    app.render_irregular_access_guidance()
+    assert len(rendered) == 1
+    parser = GuidanceParser()
+    parser.feed(rendered[0])
+    assert parser.links == ["https://www.omoshiro-cre8works.com/ai-uranai", "https://www.omoshiro-cre8works.com/contact"]
+    assert parser.headings == ["h1", "h2", "h2"]
+    assert '<section class="irregular-access-guidance" aria-labelledby="irregular-access-title">' in rendered[0]
+    assert '<main' not in rendered[0]
+    for text in (
+        "このページをご覧のお客様へ",
+        "インターネットの接続不良など、何らかの理由で通常の画面に進めなかった可能性があります。",
+        "ご利用状況に応じて、以下をご確認ください。",
+        "これから鑑定を申し込む方へ",
+        "鑑定のお申し込みは、公式サイトからお進みください。",
+        "公式サイトで鑑定を申し込む",
+        "すでに購入された方へ",
+        "購入後の画面に戻れない場合は、お手元の再開URLからアクセスをお試しください。",
+        "再開できない場合や、再開URLがわからない場合は、公式サイトのお問い合わせ窓口からご連絡ください。",
+        "お問い合わせはこちら",
+    ):
+        assert text in parser.text
+    for text in ("決済結果を確認中", "PDFサンプル", "500円", "<img", "<script"):
+        assert text not in rendered[0]
+    assert ".irregular-access-guidance a:focus-visible" in rendered[0]
 
 
 def test_main_direct_checkout_still_uses_direct_checkout(monkeypatch):
