@@ -3954,6 +3954,119 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                 )
 
 
+def get_purchase_error_display(
+    *,
+    purchase_return_requested: bool,
+    direct_checkout_requested: bool,
+    active_purchase: dict[str, Any] | None,
+) -> str | None:
+    """Keep only a short-lived display error after its recovery query was cleared."""
+    state = getattr(st, "session_state", {})
+    key = "purchase_error_display"
+    now = utc_now()
+    saved = state.get(key)
+    if saved and (
+        now >= saved["expires_at"]
+        or purchase_return_requested
+        or direct_checkout_requested
+        or active_purchase
+    ):
+        state.pop(key, None)
+        saved = None
+
+    error = (
+        "auth_failed" if state.get("purchase_token_auth_failed")
+        else "missing" if state.get("purchase_token_missing")
+        else None
+    )
+    if error:
+        if purchase_return_requested and not has_purchase_return_query_params():
+            state[key] = {"kind": error, "expires_at": now + datetime.timedelta(minutes=10)}
+        return error
+    if state.get("purchase_token_pending"):
+        return None
+    return saved["kind"] if saved else None
+
+
+def render_irregular_access_guidance() -> None:
+    st.html(
+        f'''
+        <section class="irregular-access-guidance" aria-labelledby="irregular-access-title">
+            <h1 id="irregular-access-title">このページをご覧のお客様へ</h1>
+            <p class="guidance-intro">インターネットの接続不良など、何らかの理由で通常の画面に進めなかった可能性があります。</p>
+            <p>ご利用状況に応じて、以下をご確認ください。</p>
+            <section aria-labelledby="guidance-before-purchase">
+                <h2 id="guidance-before-purchase">これから鑑定を申し込む方へ</h2>
+                <p>鑑定のお申し込みは、公式サイトからお進みください。</p>
+                <a href="https://www.omoshiro-cre8works.com/ai-uranai">公式サイトで鑑定を申し込む</a>
+            </section>
+            <section aria-labelledby="guidance-after-purchase">
+                <h2 id="guidance-after-purchase">すでに購入された方へ</h2>
+                <p>購入後の画面に戻れない場合は、お手元の再開URLからアクセスをお試しください。</p>
+                <p>再開できない場合や、再開URLがわからない場合は、公式サイトのお問い合わせ窓口からご連絡ください。</p>
+                <a href="{html.escape(WIX_CONTACT_URL, quote=True)}">お問い合わせはこちら</a>
+            </section>
+        </section>
+        <style>
+        .irregular-access-guidance {{
+            box-sizing: border-box;
+            width: 100%;
+            padding: 1rem;
+            background: #ffffff;
+            color: #222222;
+            overflow-wrap: anywhere;
+        }}
+        .irregular-access-guidance h1 {{
+            font-size: clamp(1.5rem, 5vw, 2rem);
+            font-weight: 700;
+            line-height: 1.45;
+            margin: 0 0 1rem;
+            color: #222222;
+        }}
+        .irregular-access-guidance h2 {{
+            font-size: 1.25rem;
+            font-weight: 700;
+            line-height: 1.6;
+            margin: 0 0 0.75rem;
+            color: #222222;
+        }}
+        .irregular-access-guidance p {{
+            font-size: 1rem;
+            line-height: 1.8;
+            margin: 0 0 0.85rem;
+            color: #222222;
+        }}
+        .irregular-access-guidance .guidance-intro {{ color: #555555; }}
+        .irregular-access-guidance section {{
+            margin-top: 1.75rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #d8ccc6;
+        }}
+        .irregular-access-guidance a {{
+            display: inline-block;
+            box-sizing: border-box;
+            max-width: 100%;
+            padding: 0.75rem 0.25rem;
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1.8;
+            color: #8a3d24;
+            background: #ffffff;
+            text-decoration: underline;
+            text-underline-offset: 0.2em;
+        }}
+        .irregular-access-guidance a:focus-visible {{
+            outline: 3px solid #8a3d24;
+            outline-offset: 3px;
+        }}
+        @media (max-width: 480px) {{
+            .irregular-access-guidance {{ padding: 0.5rem 0; }}
+        }}
+        </style>
+        '''
+    )
+
+
 def main() -> None:
     configure_logging()
     logger = logging.getLogger(__name__)
@@ -3973,6 +4086,15 @@ def main() -> None:
     update_ga4_identifiers_from_query()
     update_tracking_session_state_from_query()
 
+    initial_query_present = bool(getattr(st, "query_params", {}))
+    initial_purchase_session_present = any(
+        getattr(st, "session_state", {}).get(key)
+        for key in (
+            "checkout_url", "checkout_product_type", "checkout_token_stored_purchase_id",
+            "checkout_token_storage_failed", "active_purchase_id", "active_access_token",
+            "self_resume_purchase_id", "self_resume_url",
+        )
+    )
     purchase_return_requested = has_purchase_return_query_params()
     direct_checkout_requested = is_direct_checkout_request()
     active_purchase = get_current_purchase_record()
@@ -3985,13 +4107,18 @@ def main() -> None:
     track_streamlit_page_view(logger, display_product_type)
 
     session_state = getattr(st, "session_state", {})
+    error_display = get_purchase_error_display(
+        purchase_return_requested=purchase_return_requested,
+        direct_checkout_requested=direct_checkout_requested,
+        active_purchase=active_purchase,
+    )
     if session_state.get("purchase_token_pending"):
         st.info("購入情報を確認しています。数秒お待ちください。")
         return
-    if session_state.get("purchase_token_missing"):
+    if error_display == "missing":
         st.warning("再開情報を確認できませんでした。保存してある再開URLをもう一度開いてください。")
         return
-    if session_state.get("purchase_token_auth_failed"):
+    if error_display == "auth_failed":
         st.warning("購入情報を確認できませんでした。保存済みの再開URLがある場合は、そちらから再度お試しください。")
         return
 
@@ -4029,6 +4156,15 @@ def main() -> None:
             return
 
         st.warning("この購入情報は現在ご利用いただけません。再度ご購入の際は、新しくお手続きください。")
+        return
+
+    if (
+        not initial_query_present
+        and not initial_purchase_session_present
+        and not purchase_return_requested
+        and not direct_checkout_requested
+    ):
+        render_irregular_access_guidance()
         return
 
     render_header()

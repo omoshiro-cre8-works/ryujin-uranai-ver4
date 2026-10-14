@@ -73,10 +73,151 @@ def setup_main_route(monkeypatch, active_purchase):
     monkeypatch.setattr(app, "render_generation_processing_screen", lambda purchase: calls.append(("processing", purchase)))
     monkeypatch.setattr(app, "render_completion_screen", lambda product_type: calls.append(("completion", product_type)))
     monkeypatch.setattr(app, "render_payment_section", lambda *args, **kwargs: calls.append(("payment", args, kwargs)))
+    monkeypatch.setattr(app, "render_irregular_access_guidance", lambda: pytest.fail("Purchase route must not show irregular access guidance"))
     monkeypatch.setattr(app, "render_notice_box", lambda: calls.append(("notice", None)))
     monkeypatch.setattr(app, "render_form_gap", lambda value: calls.append(("gap", value)))
     monkeypatch.setattr(app, "utc_now", lambda: datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc))
     return st_stub, calls
+
+
+@pytest.mark.parametrize("flag, message", [
+    ("purchase_token_pending", "購入情報を確認しています。数秒お待ちください。"),
+    ("purchase_token_missing", "再開情報を確認できませんでした。保存してある再開URLをもう一度開いてください。"),
+    ("purchase_token_auth_failed", "購入情報を確認できませんでした。保存済みの再開URLがある場合は、そちらから再度お試しください。"),
+])
+def test_purchase_recovery_state_precedes_irregular_guidance(monkeypatch, flag, message):
+    st_stub, calls = setup_main_route(monkeypatch, None)
+    st_stub.session_state[flag] = True
+    app.main()
+    assert ("info" if flag == "purchase_token_pending" else "warning", message) in st_stub.calls
+    assert calls == []
+
+
+def test_unpaid_purchase_keeps_payment_waiting_message(monkeypatch):
+    st_stub, calls = setup_main_route(monkeypatch, make_purchase(payment_status="pending"))
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *args: None)
+    app.main()
+    assert ("info", "決済結果を確認中です。数秒後に再読み込みしてください。") in st_stub.calls
+    assert calls == []
+
+
+def setup_error_reruns(monkeypatch):
+    real_reader = app.get_current_purchase_record
+    real_return_check = app.has_purchase_return_query_params
+    real_checkout_check = app.is_direct_checkout_request
+    st_stub, calls = setup_main_route(monkeypatch, None)
+    monkeypatch.setattr(app, "get_current_purchase_record", real_reader)
+    monkeypatch.setattr(app, "has_purchase_return_query_params", real_return_check)
+    monkeypatch.setattr(app, "is_direct_checkout_request", real_checkout_check)
+    monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: None)
+    monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda *a, **k: None)
+    monkeypatch.setattr(app, "cleanup_self_resume_token", lambda *a, **k: None)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *a: None)
+    monkeypatch.setattr(app, "render_irregular_access_guidance", lambda: calls.append(("guidance",)))
+    for name in ("create_checkout_session", "update_purchase_record", "consume_purchase"):
+        monkeypatch.setattr(app, name, lambda *a, **k: pytest.fail("Unexpected purchase write"))
+    clock = [datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc)]
+    monkeypatch.setattr(app, "utc_now", lambda: clock[0])
+    return st_stub, calls, clock
+
+
+@pytest.mark.parametrize("failure", ["purchase_mismatch", "invalid_resume", "legacy_token"])
+def test_cleaned_auth_error_survives_reruns_without_extending_deadline(monkeypatch, failure):
+    st_stub, calls, clock = setup_error_reruns(monkeypatch)
+    if failure == "purchase_mismatch":
+        st_stub.query_params = {"session_id": "cs_test", "purchase_id": "p_wrong"}
+        monkeypatch.setattr(app, "sync_purchase_from_session", lambda *a: make_purchase())
+    elif failure == "invalid_resume":
+        st_stub.query_params = {"action": "resume", "purchase_id": "p_test"}
+        monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda *a: ("dummy-token", "received"))
+        monkeypatch.setattr(app, "get_purchase_by_access_token", lambda *a: None)
+    else:
+        st_stub.query_params = {"access_token": "dummy-legacy-token"}
+    start = clock[0]
+    app.main()
+    assert st_stub.query_params == {}
+    assert st_stub.session_state.active_purchase_id is None
+    assert st_stub.session_state.active_access_token is None
+    saved = dict(st_stub.session_state.purchase_error_display)
+    assert saved == {"kind": "auth_failed", "expires_at": start + datetime.timedelta(minutes=10)}
+    for seconds in (60, 599):
+        clock[0] = start + datetime.timedelta(seconds=seconds)
+        app.main()
+        assert st_stub.session_state.purchase_error_display == saved
+        assert st_stub.calls[-1] == ("warning", "購入情報を確認できませんでした。保存済みの再開URLがある場合は、そちらから再度お試しください。")
+        assert calls == []
+    clock[0] = start + datetime.timedelta(minutes=10)
+    app.main()
+    assert "purchase_error_display" not in st_stub.session_state
+    assert calls == [("guidance",)]
+
+
+@pytest.mark.parametrize("failure", ["missing", "stale"])
+def test_remaining_recovery_query_is_rechecked_without_display_cache(monkeypatch, failure):
+    st_stub, calls, clock = setup_error_reruns(monkeypatch)
+    reads = []
+    if failure == "missing":
+        st_stub.query_params = {"action": "resume", "purchase_id": "p_test"}
+        monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda *a: reads.append(1) or (None, "missing"))
+    else:
+        st_stub.query_params = {"session_id": "cs_test", "purchase_id": "p_self_resume"}
+        monkeypatch.setattr(app, "sync_purchase_from_session", lambda *a: make_purchase())
+        monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda *a: reads.append(1) or (None, "stale"))
+    original = dict(st_stub.query_params)
+    for minutes in (0, 1, 11):
+        clock[0] = datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+        app.main()
+        assert st_stub.query_params == original
+        assert "purchase_error_display" not in st_stub.session_state
+        assert st_stub.calls[-1][0] == "warning"
+        assert calls == []
+    assert len(reads) == 3
+
+
+@pytest.mark.parametrize("route", ["checkout", "success_return", "resume", "active_purchase"])
+def test_new_purchase_route_clears_old_display_error(monkeypatch, route):
+    st_stub, calls, clock = setup_error_reruns(monkeypatch)
+    st_stub.session_state.purchase_error_display = {"kind": "auth_failed", "expires_at": clock[0] + datetime.timedelta(minutes=5)}
+    purchase = make_purchase()
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda *a: purchase)
+    if route == "checkout":
+        st_stub.query_params = {"action": "checkout", "product_type": "regular"}
+        monkeypatch.setattr(app, "render_direct_checkout", lambda *a: calls.append(("checkout",)))
+    elif route == "success_return":
+        st_stub.query_params = {"session_id": "cs_test", "purchase_id": "p_self_resume"}
+        monkeypatch.setattr(app, "sync_purchase_from_session", lambda *a: purchase)
+        monkeypatch.setattr(app, "read_checkout_token_from_browser", lambda *a: ("dummy-token", "received"))
+        monkeypatch.setattr(app, "prepare_self_resume_token_for_browser", lambda *a: True)
+    elif route == "resume":
+        st_stub.query_params = {"action": "resume", "purchase_id": "p_self_resume"}
+        monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda *a: ("dummy-token", "received"))
+    else:
+        st_stub.session_state.active_purchase_id = "p_self_resume"
+        monkeypatch.setattr(app, "get_purchase_record", lambda *a: purchase)
+    app.main()
+    assert "purchase_error_display" not in st_stub.session_state
+    assert not any(call[0] == "guidance" for call in calls)
+    assert (("checkout",) in calls) if route == "checkout" else (("regular_form", purchase) in calls)
+
+
+def test_tracking_only_keeps_error_and_new_failed_request_starts_new_deadline(monkeypatch):
+    st_stub, calls, clock = setup_error_reruns(monkeypatch)
+    deadline = clock[0] + datetime.timedelta(minutes=5)
+    st_stub.session_state.purchase_error_display = {"kind": "auth_failed", "expires_at": deadline}
+    st_stub.query_params = {"utm_source": "wix"}
+    app.main()
+    assert st_stub.session_state.purchase_error_display["expires_at"] == deadline
+    st_stub.query_params = {"action": "resume", "purchase_id": "p_test"}
+    monkeypatch.setattr(app, "read_fragment_token_from_browser", lambda *a: ("dummy-token", "received"))
+    monkeypatch.setattr(app, "get_purchase_by_access_token", lambda *a: None)
+    clock[0] += datetime.timedelta(minutes=6)
+    app.main()
+    assert st_stub.session_state.purchase_error_display == {"kind": "auth_failed", "expires_at": clock[0] + datetime.timedelta(minutes=10)}
+    assert calls == []
+    st_stub.session_state = AttrDict()
+    st_stub.query_params = {}
+    app.main()
+    assert calls == [("guidance",)]
 
 
 def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatch):
