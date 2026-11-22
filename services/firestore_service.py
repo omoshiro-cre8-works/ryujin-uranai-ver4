@@ -418,7 +418,7 @@ def _pdf_metadata_matches_expected(
     if not expected_pdf_metadata:
         return False
 
-    for field in PDF_CONSUME_ONLY_MATCH_FIELDS:
+    for field in PDF_METADATA_FIELDS:
         expected = expected_pdf_metadata.get(field)
         if not expected or purchase.get(field) != expected:
             return False
@@ -457,6 +457,68 @@ def can_finalize_interrupted_pdf_generation(
         and _generation_started_within_self_resume_window(purchase)
     )
 
+
+
+def can_finalize_idle_pdf_generation(
+    purchase: Dict[str, Any] | None,
+    access_token: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Only a paid, idle purchase with existing PDF evidence can be recovered."""
+    current_time = now or _now_utc()
+    deadline = get_self_resume_expires_at(purchase)
+    return bool(
+        purchase
+        and purchase.get("payment_status") == "paid"
+        and purchase.get("product_type") in VALID_SELF_RESUME_PRODUCT_TYPES
+        and purchase.get("used_flag") is False
+        and purchase.get("generation_processing") is False
+        and _access_token_matches(purchase, access_token)
+        and _as_utc_datetime(purchase.get("checkout_completed_at"))
+        and deadline
+        and current_time <= deadline
+        and _generation_started_within_self_resume_window(purchase)
+        and _has_ready_pdf_metadata(purchase, now=current_time)
+    )
+
+
+def consume_idle_pdf_purchase_transaction(
+    purchase_id: str,
+    access_token: str,
+    expected_pdf_metadata: Dict[str, Any],
+) -> bool:
+    """Consume T16 only; never relax the existing processing-only T08 path."""
+    if not purchase_id or not access_token or not expected_pdf_metadata:
+        return False
+    db = get_firestore_client()
+    doc_ref = get_purchase_collection(db).document(purchase_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def consume_idle(transaction: Any) -> bool:
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return False
+        purchase = snapshot.to_dict() or {}
+        if not can_finalize_idle_pdf_generation(purchase, access_token):
+            return False
+        if not _pdf_metadata_matches_expected(purchase, expected_pdf_metadata):
+            return False
+        now = _now_utc()
+        transaction.update(
+            doc_ref,
+            {
+                "used_flag": True,
+                "used_at": now,
+                "generation_processing": False,
+                "generation_processing_ended_at": now,
+                "updated_at": now,
+            },
+        )
+        return True
+
+    return consume_idle(transaction)
 
 def save_pdf_recovery_metadata_transaction(
     purchase_id: str,
@@ -526,6 +588,8 @@ def claim_generation_transaction(purchase_id: str, access_token: str) -> str:
 
         purchase = snapshot.to_dict() or {}
         if not _purchase_can_start_generation(purchase, access_token):
+            return GENERATION_CLAIM_NOT_READY
+        if purchase.get("pdf_status") == PDF_STATUS_READY:
             return GENERATION_CLAIM_NOT_READY
         if purchase.get("generation_processing") is True:
             return GENERATION_CLAIM_PROCESSING
@@ -600,6 +664,8 @@ def release_generation_claim_transaction(purchase_id: str, access_token: str) ->
             return False
 
         purchase = snapshot.to_dict() or {}
+        if purchase.get("pdf_status") == PDF_STATUS_READY:
+            return False
         if purchase.get("used_flag") is not False:
             return False
         if not _access_token_matches(purchase, access_token):

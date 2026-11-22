@@ -11,6 +11,8 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
+from dataclasses import dataclass
+from enum import Enum
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -47,6 +49,9 @@ from config import (
 from models.schemas import FortuneInput, PalmImageMeta
 from services.firestore_service import (
     GENERATION_CLAIMED,
+    PDF_METADATA_FIELDS,
+    can_finalize_idle_pdf_generation,
+    consume_idle_pdf_purchase_transaction,
     GENERATION_CLAIM_PROCESSING,
     can_finalize_interrupted_pdf_generation,
     can_recover_purchase_pdf,
@@ -1578,6 +1583,7 @@ def is_purchase_ready(record: dict[str, Any] | None) -> bool:
         and record.get("payment_status") == "paid"
         and not record.get("used_flag")
         and record.get("generation_processing") is not True
+        and record.get("pdf_status") != "ready"
         and is_self_resume_window_active(record)
     )
 
@@ -1830,43 +1836,65 @@ def prepare_pdf_recovery_metadata(
     return stored_pdf.firestore_metadata()
 
 
+class PdfMetadataSaveStatus(Enum):
+    SAVED = "saved"
+    NOT_SAVED = "not_saved"
+    UNKNOWN = "unknown"
+    NOT_REQUIRED = "not_required"
+
+
+@dataclass(frozen=True)
+class PdfMetadataSaveResult:
+    status: PdfMetadataSaveStatus
+    purchase: dict[str, Any] | None = None
+
+    def __bool__(self) -> bool:
+        raise TypeError("Compare PDF metadata save status explicitly")
+
+
+@dataclass(frozen=True)
+class VerifiedRecoveryPdf:
+    purchase_id: str
+    metadata: dict[str, Any]
+    pdf_bytes: bytes
+
+
 def persist_pdf_recovery_metadata_before_consume(
     purchase_id: str,
     pdf_metadata: dict[str, Any] | None,
     logger: logging.Logger,
-) -> bool:
-    if not pdf_metadata:
-        return True
-
-    logger.info(
-        "pdf_metadata_save_started",
-        extra={"purchase_ref": mask_purchase_id(purchase_id)},
-    )
+) -> PdfMetadataSaveResult:
+    if pdf_metadata is None:
+        return PdfMetadataSaveResult(PdfMetadataSaveStatus.NOT_REQUIRED)
+    token = str(st.session_state.get("active_access_token") or "")
+    logger.info("pdf_metadata_save_started", extra={"purchase_ref": mask_purchase_id(purchase_id)})
     try:
-        saved = save_pdf_recovery_metadata_transaction(
-            purchase_id,
-            str(st.session_state.get("active_access_token") or ""),
-            pdf_metadata,
-        )
+        saved = save_pdf_recovery_metadata_transaction(purchase_id, token, pdf_metadata)
     except Exception:
-        logger.exception(
-            "pdf_metadata_save_failed",
-            extra={"purchase_ref": mask_purchase_id(purchase_id)},
-        )
-        return False
-
-    if not saved:
-        logger.warning(
-            "pdf_metadata_save_rejected",
-            extra={"purchase_ref": mask_purchase_id(purchase_id)},
-        )
-        return False
-
-    logger.info(
-        "pdf_metadata_save_succeeded",
-        extra={"purchase_ref": mask_purchase_id(purchase_id)},
-    )
-    return True
+        # An exception cannot establish whether the write committed.
+        logger.warning("pdf_metadata_save_unknown", extra={"purchase_ref": mask_purchase_id(purchase_id)})
+        try:
+            purchase = get_purchase_record(purchase_id)
+        except Exception:
+            purchase = None
+        if (
+            purchase
+            and purchase.get("purchase_id") == purchase_id
+            and get_recovery_pdf_metadata_snapshot(purchase) == pdf_metadata
+            and (
+                can_finalize_interrupted_pdf_generation(purchase, token)
+                or can_finalize_idle_pdf_generation(purchase, token)
+                or can_recover_purchase_pdf(purchase, token)
+            )
+        ):
+            return PdfMetadataSaveResult(PdfMetadataSaveStatus.SAVED, purchase)
+        return PdfMetadataSaveResult(PdfMetadataSaveStatus.UNKNOWN)
+    if saved is not True:
+        # A rejection is not proof that the purchase has no saved artifact.
+        logger.warning("pdf_metadata_save_rejected", extra={"purchase_ref": mask_purchase_id(purchase_id)})
+        return PdfMetadataSaveResult(PdfMetadataSaveStatus.NOT_SAVED)
+    logger.info("pdf_metadata_save_succeeded", extra={"purchase_ref": mask_purchase_id(purchase_id)})
+    return PdfMetadataSaveResult(PdfMetadataSaveStatus.SAVED)
 
 
 def consume_purchase(
@@ -1906,50 +1934,152 @@ def consume_purchase(
 
 
 def get_recovery_pdf_metadata_snapshot(purchase: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "pdf_object_path": purchase.get("pdf_object_path"),
-        "pdf_expires_at": purchase.get("pdf_expires_at"),
-        "pdf_sha256": purchase.get("pdf_sha256"),
-        "pdf_artifact_version": purchase.get("pdf_artifact_version"),
-    }
+    return {field: purchase.get(field) for field in PDF_METADATA_FIELDS}
+
+
+def verify_stored_pdf_for_recovery(
+    purchase: dict[str, Any],
+    access_token: str,
+    logger: logging.Logger,
+) -> VerifiedRecoveryPdf | None:
+    """Read only an authenticated record's object, outside the DB transaction."""
+    if not (
+        can_finalize_interrupted_pdf_generation(purchase, access_token)
+        or can_finalize_idle_pdf_generation(purchase, access_token)
+        or can_recover_purchase_pdf(purchase, access_token)
+    ):
+        return None
+    if not is_pdf_recovery_enabled():
+        return None
+    purchase_id = str(purchase.get("purchase_id") or "")
+    if not purchase_id:
+        return None
+    metadata = get_recovery_pdf_metadata_snapshot(purchase)
+    try:
+        pdf_bytes = read_pdf_for_recovery(str(metadata["pdf_object_path"]))
+    except Exception:
+        logger.warning("pdf_recovery_verification_read_failed", extra={"purchase_ref": mask_purchase_id(purchase_id)})
+        return None
+    if not isinstance(pdf_bytes, bytes) or sha256_pdf(pdf_bytes) != metadata["pdf_sha256"]:
+        logger.warning("pdf_recovery_verification_hash_mismatch", extra={"purchase_ref": mask_purchase_id(purchase_id)})
+        return None
+    return VerifiedRecoveryPdf(purchase_id, metadata, pdf_bytes)
+
+
+def _finalize_stored_pdf_generation(
+    active_purchase: dict[str, Any] | None,
+    logger: logging.Logger,
+    *,
+    idle: bool,
+    verified_pdf_out: list[VerifiedRecoveryPdf] | None = None,
+) -> dict[str, Any] | None:
+    if not active_purchase:
+        return None
+    token = str(st.session_state.get("active_access_token") or "")
+    eligible = can_finalize_idle_pdf_generation if idle else can_finalize_interrupted_pdf_generation
+    if not eligible(active_purchase, token):
+        return None
+    verified = verify_stored_pdf_for_recovery(active_purchase, token, logger)
+    if verified is None:
+        return None
+    try:
+        if idle:
+            consumed = consume_idle_pdf_purchase_transaction(verified.purchase_id, token, verified.metadata)
+        else:
+            consumed = consume_purchase(
+                verified.purchase_id,
+                logger,
+                require_ready_pdf_metadata=True,
+                require_generation_processing=True,
+                expected_pdf_metadata=verified.metadata,
+            )
+    except Exception:
+        # The commit outcome is unknown; never release or regenerate.
+        pass
+    try:
+        # Re-read even if commit returned an error: another recovery may have won.
+        refreshed = get_purchase_record(verified.purchase_id)
+    except Exception:
+        return None
+    if not (
+        refreshed
+        and get_recovery_pdf_metadata_snapshot(refreshed) == verified.metadata
+        and can_recover_purchase_pdf(refreshed, token)
+    ):
+        return None
+    if verified_pdf_out is not None:
+        verified_pdf_out.append(verified)
+    logger.info("pdf_recovery_finalize_succeeded", extra={"purchase_ref": mask_purchase_id(verified.purchase_id)})
+    return refreshed
 
 
 def finalize_interrupted_pdf_generation_if_ready(
     active_purchase: dict[str, Any] | None,
     logger: logging.Logger,
+    *,
+    verified_pdf_out: list[VerifiedRecoveryPdf] | None = None,
 ) -> dict[str, Any] | None:
-    if not active_purchase:
-        return None
+    return _finalize_stored_pdf_generation(active_purchase, logger, idle=False, verified_pdf_out=verified_pdf_out)
 
-    purchase_id = str(active_purchase.get("purchase_id") or "")
-    access_token = str(st.session_state.get("active_access_token") or "")
-    if not can_finalize_interrupted_pdf_generation(active_purchase, access_token):
-        return None
 
-    logger.info(
-        "pdf_recovery_interrupted_finalize_started",
-        extra={"purchase_ref": mask_purchase_id(purchase_id)},
-    )
-    expected_pdf_metadata = get_recovery_pdf_metadata_snapshot(active_purchase)
-    if not consume_purchase(
-        purchase_id,
-        logger,
-        require_ready_pdf_metadata=True,
-        require_generation_processing=True,
-        expected_pdf_metadata=expected_pdf_metadata,
-    ):
-        logger.warning(
-            "pdf_recovery_interrupted_finalize_rejected",
-            extra={"purchase_ref": mask_purchase_id(purchase_id)},
-        )
-        return None
+def finalize_idle_pdf_generation_if_ready(
+    active_purchase: dict[str, Any] | None,
+    logger: logging.Logger,
+    *,
+    verified_pdf_out: list[VerifiedRecoveryPdf] | None = None,
+) -> dict[str, Any] | None:
+    return _finalize_stored_pdf_generation(active_purchase, logger, idle=True, verified_pdf_out=verified_pdf_out)
 
-    refreshed = get_purchase_record(purchase_id)
-    logger.info(
-        "pdf_recovery_interrupted_finalize_succeeded",
-        extra={"purchase_ref": mask_purchase_id(purchase_id)},
-    )
-    return refreshed
+
+def finish_generation_after_metadata_save(
+    purchase_id: str,
+    saved: PdfMetadataSaveResult,
+    pdf_data: bytes,
+    pdf_metadata: dict[str, Any] | None,
+    logger: logging.Logger,
+) -> bytes | None:
+    if saved.status is PdfMetadataSaveStatus.NOT_REQUIRED:
+        if consume_purchase(purchase_id, logger):
+            return pdf_data
+        release_generation_claim_after_failure(purchase_id, logger)
+        return None
+    if saved.status is not PdfMetadataSaveStatus.SAVED:
+        st.session_state.generation_claim_status = "recovery_pending"
+        return None
+    if saved.purchase is None:
+        if consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata):
+            return pdf_data
+        st.session_state.generation_claim_status = "recovery_pending"
+        return None
+    # Read-back recovery uses the same verifier as T08/T16, not unchecked bytes.
+    purchase = saved.purchase
+    token = str(st.session_state.get("active_access_token") or "")
+    if purchase.get("used_flag") is True:
+        verified = verify_stored_pdf_for_recovery(purchase, token, logger)
+        if verified is None:
+            return None
+        try:
+            refreshed = get_purchase_record(purchase_id)
+        except Exception:
+            return None
+        if not (
+            refreshed
+            and get_recovery_pdf_metadata_snapshot(refreshed) == verified.metadata
+            and can_recover_purchase_pdf(refreshed, token)
+        ):
+            return None
+        render_pdf_recovery_screen(refreshed, logger, verified_pdf=verified)
+        st.session_state.generation_claim_status = "recovery_completed"
+        return None
+    verified_out: list[VerifiedRecoveryPdf] = []
+    finalize = finalize_idle_pdf_generation_if_ready if purchase.get("generation_processing") is False else finalize_interrupted_pdf_generation_if_ready
+    finalized = finalize(purchase, logger, verified_pdf_out=verified_out)
+    if finalized is None or not verified_out:
+        st.session_state.generation_claim_status = "recovery_pending"
+        return None
+    render_pdf_recovery_screen(finalized, logger, verified_pdf=verified_out[0])
+    st.session_state.generation_claim_status = "recovery_completed"
+    return None
 
 
 def claim_purchase_generation(purchase_id: str, logger: logging.Logger) -> str:
@@ -2056,24 +2186,11 @@ def generate_regular_fortune_pdf_and_consume(
         release_generation_claim_after_failure(purchase_id, logger)
         raise
 
-    if not persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger):
-        release_generation_claim_after_failure(purchase_id, logger)
+    saved = persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger)
+    completed_pdf = finish_generation_after_metadata_save(purchase_id, saved, pdf_data, pdf_metadata, logger)
+    if completed_pdf is None:
         return None
-
-    consumed = (
-        consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
-        if pdf_metadata
-        else consume_purchase(purchase_id, logger)
-    )
-    if not consumed:
-        if pdf_metadata:
-            logger.warning(
-                "purchase_consume_deferred_after_pdf_metadata_saved",
-                extra={"purchase_ref": mask_purchase_id(purchase_id)},
-            )
-        else:
-            release_generation_claim_after_failure(purchase_id, logger)
-        return None
+    pdf_data = completed_pdf
     return result, pdf_data, pdf_metadata
 
 
@@ -2131,24 +2248,11 @@ def generate_review_fortune_pdf_and_consume(
         release_generation_claim_after_failure(purchase_id, logger)
         raise
 
-    if not persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger):
-        release_generation_claim_after_failure(purchase_id, logger)
+    saved = persist_pdf_recovery_metadata_before_consume(purchase_id, pdf_metadata, logger)
+    completed_pdf = finish_generation_after_metadata_save(purchase_id, saved, pdf_data, pdf_metadata, logger)
+    if completed_pdf is None:
         return {"status": "consume_failed"}
-
-    consumed = (
-        consume_purchase(purchase_id, logger, pdf_metadata=pdf_metadata)
-        if pdf_metadata
-        else consume_purchase(purchase_id, logger)
-    )
-    if not consumed:
-        if pdf_metadata:
-            logger.warning(
-                "purchase_consume_deferred_after_pdf_metadata_saved",
-                extra={"purchase_ref": mask_purchase_id(purchase_id)},
-            )
-        else:
-            release_generation_claim_after_failure(purchase_id, logger)
-        return {"status": "consume_failed"}
+    pdf_data = completed_pdf
 
     return {
         "status": "success",
@@ -3017,6 +3121,8 @@ def is_pdf_recovery_expired(record: dict[str, Any] | None) -> bool:
 def render_pdf_recovery_screen(
     active_purchase: dict[str, Any],
     logger: logging.Logger,
+    *,
+    verified_pdf: VerifiedRecoveryPdf | None = None,
 ) -> bool:
     if not has_pdf_recovery_metadata(active_purchase):
         return False
@@ -3049,7 +3155,14 @@ def render_pdf_recovery_screen(
     object_path = str(active_purchase.get("pdf_object_path") or "")
     expected_sha256 = str(active_purchase.get("pdf_sha256") or "")
     try:
-        pdf_data = read_pdf_for_recovery(object_path)
+        if (
+            verified_pdf is not None
+            and verified_pdf.purchase_id == str(active_purchase.get("purchase_id") or "")
+            and verified_pdf.metadata == get_recovery_pdf_metadata_snapshot(active_purchase)
+        ):
+            pdf_data = verified_pdf.pdf_bytes
+        else:
+            pdf_data = read_pdf_for_recovery(object_path)
     except Exception:
         logger.exception(
             "pdf_recovery_read_failed",
@@ -3471,6 +3584,11 @@ def render_review_fortune_form(active_purchase: dict[str, Any], logger: logging.
                 return
 
             if completed.get("status") == "consume_failed":
+                if st.session_state.get("generation_claim_status") == "recovery_completed":
+                    return
+                if st.session_state.get("generation_claim_status") == "recovery_pending":
+                    st.info("保存結果を確認中です。再生成せず、再開URLから開き直すかお問い合わせください。")
+                    return
                 st.error("購入権の確認に失敗しました。")
                 st.error("ページを更新せず、時間をおいて再度お試しください。")
                 st.error("解消しない場合は、お問い合わせください。")
@@ -3857,10 +3975,14 @@ def render_fortune_form(active_purchase: dict[str, Any], logger: logging.Logger)
                     )
 
                 if completed is None:
+                    if st.session_state.get("generation_claim_status") == "recovery_completed":
+                        return
                     if st.session_state.get("generation_claim_status") == GENERATION_CLAIM_PROCESSING:
                         st.info("現在処理中です。完了までお待ちください。")
                     elif st.session_state.get("generation_claim_status") == "configuration_error":
                         render_pdf_recovery_configuration_error()
+                    elif st.session_state.get("generation_claim_status") == "recovery_pending":
+                        st.info("保存結果を確認中です。再生成せず、再開URLから開き直すかお問い合わせください。")
                     else:
                         st.error("購入権の確認に失敗しました。ページを更新せず、時間をおいて再度お試しください。")
                         st.error("解消しない場合は、お問い合わせください。")
@@ -4126,12 +4248,29 @@ def main() -> None:
         render_direct_checkout(requested_product_type, logger)
         return
 
-    finalized_purchase = finalize_interrupted_pdf_generation_if_ready(active_purchase, logger)
-    if finalized_purchase:
-        active_purchase = finalized_purchase
+    verified_pdf_out: list[VerifiedRecoveryPdf] = []
+    if active_purchase and active_purchase.get("pdf_status") == "ready" and active_purchase.get("used_flag") is not True:
+        if active_purchase.get("used_flag") is not False:
+            st.warning("保存済みPDFの購入状態を確認できませんでした。再生成せず、お問い合わせください。")
+            return
+        finalize = (
+            finalize_idle_pdf_generation_if_ready
+            if active_purchase.get("generation_processing") is False
+            else finalize_interrupted_pdf_generation_if_ready
+        )
+        finalized_purchase = finalize(active_purchase, logger, verified_pdf_out=verified_pdf_out)
+        if finalized_purchase:
+            active_purchase = finalized_purchase
+        else:
+            st.warning("保存済みPDFの復旧を確認できませんでした。再生成せず、お問い合わせください。")
+            return
 
     if active_purchase and active_purchase.get("used_flag"):
-        if render_pdf_recovery_screen(active_purchase, logger):
+        if render_pdf_recovery_screen(
+            active_purchase,
+            logger,
+            verified_pdf=verified_pdf_out[0] if verified_pdf_out else None,
+        ):
             st.stop()
         render_completion_screen(get_purchase_product_type(active_purchase))
         st.stop()

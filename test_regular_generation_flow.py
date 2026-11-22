@@ -46,7 +46,7 @@ def test_regular_generation_consumes_only_after_gemini_and_pdf(monkeypatch):
     monkeypatch.setattr(
         app,
         "persist_pdf_recovery_metadata_before_consume",
-        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(app.PdfMetadataSaveStatus.SAVED if pdf_metadata else app.PdfMetadataSaveStatus.NOT_REQUIRED),
     )
 
     completed = app.generate_regular_fortune_pdf_and_consume(
@@ -148,7 +148,7 @@ def test_regular_generation_returns_none_when_consume_fails(monkeypatch):
     monkeypatch.setattr(
         app,
         "persist_pdf_recovery_metadata_before_consume",
-        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(app.PdfMetadataSaveStatus.SAVED if pdf_metadata else app.PdfMetadataSaveStatus.NOT_REQUIRED),
     )
 
     completed = app.generate_regular_fortune_pdf_and_consume(

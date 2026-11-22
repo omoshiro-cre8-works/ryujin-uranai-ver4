@@ -98,7 +98,7 @@ def test_review_generation_consumes_only_after_summary_fortune_and_pdf(monkeypat
     monkeypatch.setattr(
         app,
         "persist_pdf_recovery_metadata_before_consume",
-        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(app.PdfMetadataSaveStatus.SAVED if pdf_metadata else app.PdfMetadataSaveStatus.NOT_REQUIRED),
     )
 
     completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
@@ -251,7 +251,7 @@ def test_review_generation_returns_no_result_when_consume_fails(monkeypatch):
     monkeypatch.setattr(
         app,
         "persist_pdf_recovery_metadata_before_consume",
-        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True,
+        lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(app.PdfMetadataSaveStatus.SAVED if pdf_metadata else app.PdfMetadataSaveStatus.NOT_REQUIRED),
     )
 
     completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
@@ -280,7 +280,7 @@ def test_review_generation_persists_metadata_before_consume(monkeypatch):
     )
     monkeypatch.setattr(app, "generate_review_fortune_pdf", lambda **kwargs: calls.append("pdf") or b"pdf")
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
-    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or True)
+    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(app.PdfMetadataSaveStatus.SAVED if pdf_metadata else app.PdfMetadataSaveStatus.NOT_REQUIRED))
     monkeypatch.setattr(app, "consume_purchase", lambda purchase_id, logger, pdf_metadata=None: calls.append("consume") or True)
 
     completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
@@ -290,7 +290,8 @@ def test_review_generation_persists_metadata_before_consume(monkeypatch):
     assert calls == ["claim", "summary", "context", "fortune", "pdf", "upload", "metadata", "consume"]
 
 
-def test_review_generation_stops_after_preconsume_metadata_failure(monkeypatch):
+@pytest.mark.parametrize("save_status", [app.PdfMetadataSaveStatus.NOT_SAVED, app.PdfMetadataSaveStatus.UNKNOWN])
+def test_review_generation_stops_after_preconsume_metadata_failure(monkeypatch, save_status):
     calls = []
     metadata = make_pdf_metadata()
     allow_generation_claim(monkeypatch, calls)
@@ -310,13 +311,13 @@ def test_review_generation_stops_after_preconsume_metadata_failure(monkeypatch):
     )
     monkeypatch.setattr(app, "generate_review_fortune_pdf", lambda **kwargs: calls.append("pdf") or b"pdf")
     monkeypatch.setattr(app, "prepare_pdf_recovery_metadata", lambda purchase_id, pdf_data, logger: calls.append("upload") or metadata)
-    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or False)
+    monkeypatch.setattr(app, "persist_pdf_recovery_metadata_before_consume", lambda purchase_id, pdf_metadata, logger: calls.append("metadata") or app.PdfMetadataSaveResult(save_status))
     monkeypatch.setattr(app, "consume_purchase", lambda *args, **kwargs: calls.append("consume") or True)
 
     completed = app.generate_review_fortune_pdf_and_consume(**make_review_inputs())
 
     assert completed == {"status": "consume_failed"}
-    assert calls == ["claim", "summary", "context", "fortune", "pdf", "upload", "metadata", "release"]
+    assert calls == ["claim", "summary", "context", "fortune", "pdf", "upload", "metadata"]
 
 
 def test_review_generation_does_not_call_gemini_when_claim_fails(monkeypatch):
