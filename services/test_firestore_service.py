@@ -1050,3 +1050,214 @@ def test_mark_ga4_event_sent_if_unset_skips_already_sent(monkeypatch):
 
     assert marked is False
     assert client.transaction_ref.updates == []
+
+
+# Recovery safety contracts, using existing local fakes.
+import copy
+fs = firestore_service
+RECOVERY_NOW = datetime(2026,11,21,12,0,tzinfo=timezone.utc)
+
+@pytest.fixture
+def recovery_clock_and_collection(monkeypatch):
+    monkeypatch.setattr(fs, "_now_utc", lambda: RECOVERY_NOW)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.delenv("FIRESTORE_COLLECTION_NAME", raising=False)
+
+
+def recovery_ready_purchase(product="regular", **updates):
+    metadata = {
+        "pdf_status": "ready",
+        "pdf_object_path": "pdf-recovery/p_transaction/synthetic-artifact.pdf",
+        "pdf_generated_at": RECOVERY_NOW - timedelta(minutes=15),
+        "pdf_expires_at": RECOVERY_NOW + timedelta(days=6),
+        "pdf_sha256": "a" * 64,
+        "pdf_artifact_version": "v1",
+    }
+    token, record = _consume_record(
+        product_type=product,
+        checkout_completed_at=RECOVERY_NOW - timedelta(days=1),
+        token_expires_at=RECOVERY_NOW + timedelta(hours=1),
+        generation_processing=False,
+        generation_processing_started_at=RECOVERY_NOW - timedelta(minutes=30),
+        **metadata,
+    )
+    record.update(updates)
+    return token, record, metadata
+
+
+def install_recovery_db(monkeypatch, record):
+    client = FakeFirestoreClient([record])
+    monkeypatch.setattr(fs, "get_firestore_client", lambda: client)
+    monkeypatch.setattr(fs.firestore, "transactional", lambda callback: callback)
+    return client
+
+
+def recovery_idle_consume(monkeypatch, record, token, expected):
+    client = install_recovery_db(monkeypatch, record)
+    result = fs.consume_idle_pdf_purchase_transaction("p_transaction", token, expected)
+    return result, client
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {},
+        {"pdf_object_path": ""},
+        {"pdf_sha256": ""},
+        {"pdf_artifact_version": None},
+        {"pdf_generated_at": None},
+        {"pdf_expires_at": RECOVERY_NOW - timedelta(seconds=1)},
+    ],
+)
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_ready_raw_status_blocks_new_claim_even_when_metadata_is_unusable(monkeypatch, product, changes):
+    token, record, _ = recovery_ready_purchase(product, **changes)
+    before = copy.deepcopy(record)
+    result, client = _run_claim(monkeypatch, record, token)
+    assert result != fs.GENERATION_CLAIMED
+    assert client.transaction_ref.updates == []
+    assert record == before
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.parametrize(
+    "changes",
+    [{}, {"pdf_sha256": None}, {"pdf_expires_at": RECOVERY_NOW - timedelta(seconds=1)}],
+)
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_ready_raw_status_blocks_processing_release(monkeypatch, product, changes):
+    token, record, _ = recovery_ready_purchase(product, generation_processing=True, **changes)
+    before = copy.deepcopy(record)
+    result, client = _run_release(monkeypatch, record, token)
+    assert result is False
+    assert client.transaction_ref.updates == []
+    assert record == before
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_ready_finalization_only_changes_consumption_fields(monkeypatch, product):
+    token, record, metadata = recovery_ready_purchase(product)
+    assert fs.can_finalize_idle_pdf_generation(record, token, now=RECOVERY_NOW) is True
+    result, client = recovery_idle_consume(monkeypatch, record, token, metadata)
+    assert result is True
+    assert record["used_flag"] is True
+    assert record["generation_processing"] is False
+    assert all(record[field] == value for field, value in metadata.items())
+    updates = client.transaction_ref.updates[0][1]
+    assert updates["used_flag"] is True
+    assert set(updates) <= {"used_flag", "used_at", "generation_processing", "generation_processing_ended_at", "updated_at"}
+    assert not set(fs.PDF_METADATA_FIELDS).intersection(updates)
+    assert fs.consume_idle_pdf_purchase_transaction("p_transaction", token, metadata) is False
+    assert len(client.transaction_ref.updates) == 1
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"payment_status": "pending"},
+        {"used_flag": True},
+        {"used_flag": None},
+        {"used_flag": 0},
+        {"generation_processing": True},
+        {"generation_processing": None},
+        {"generation_processing": 0},
+        {"product_type": "other"},
+        {"product_type": None},
+        {"pdf_status": None},
+        {"pdf_object_path": ""},
+        {"pdf_sha256": "invalid"},
+        {"pdf_artifact_version": ""},
+        {"pdf_generated_at": None},
+        {"pdf_expires_at": RECOVERY_NOW},
+        {"pdf_expires_at": RECOVERY_NOW - timedelta(seconds=1)},
+        {"checkout_completed_at": None},
+        {"checkout_completed_at": RECOVERY_NOW - timedelta(days=7, seconds=1)},
+        {"generation_processing_started_at": None},
+        {"generation_processing_started_at": RECOVERY_NOW + timedelta(days=7)},
+    ],
+)
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_finalization_rejects_unsafe_purchase_without_write(monkeypatch, product, updates):
+    token, record, metadata = recovery_ready_purchase(product, **updates)
+    before = copy.deepcopy(record)
+    assert fs.can_finalize_idle_pdf_generation(record, token, now=RECOVERY_NOW) is False
+    result, client = recovery_idle_consume(monkeypatch, record, token, metadata)
+    assert result is False
+    assert client.transaction_ref.updates == []
+    assert record == before
+
+
+@pytest.mark.parametrize("missing", ["generation_processing", "generation_processing_started_at", "checkout_completed_at"])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_finalization_never_invents_missing_state_or_dates(monkeypatch, missing):
+    token, record, metadata = recovery_ready_purchase()
+    record.pop(missing)
+    before = copy.deepcopy(record)
+    assert fs.can_finalize_idle_pdf_generation(record, token, now=RECOVERY_NOW) is False
+    result, client = recovery_idle_consume(monkeypatch, record, token, metadata)
+    assert result is False
+    assert client.transaction_ref.updates == []
+    assert record == before
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_token_identity_is_required_but_generation_token_expiry_is_not_the_self_resume_window(monkeypatch, product):
+    token, record, metadata = recovery_ready_purchase(product, token_expires_at=RECOVERY_NOW - timedelta(hours=1))
+    assert fs.can_finalize_idle_pdf_generation(record, token, now=RECOVERY_NOW) is True
+    assert fs.can_finalize_idle_pdf_generation(record, "wrong-synthetic-token", now=RECOVERY_NOW) is False
+    result, client = recovery_idle_consume(monkeypatch, record, "wrong-synthetic-token", metadata)
+    assert result is False
+    assert client.transaction_ref.updates == []
+    result = fs.consume_idle_pdf_purchase_transaction("p_transaction", token, metadata)
+    assert result is True
+
+
+@pytest.mark.parametrize("product", ["regular", "review"])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_legacy_plaintext_token_remains_supported(monkeypatch, product):
+    token, record, metadata = recovery_ready_purchase(product)
+    record.pop("access_token_hash")
+    record["access_token"] = token
+    result, _ = recovery_idle_consume(monkeypatch, record, token, metadata)
+    assert result is True
+
+
+@pytest.mark.parametrize("route,field,new_value", [
+ (route,field,value) for route in ("idle","processing") for field,value in (
+ ("pdf_status","pending"),("pdf_object_path","pdf-recovery/p_transaction/other.pdf"),
+ ("pdf_generated_at",RECOVERY_NOW-timedelta(minutes=14)),("pdf_expires_at",RECOVERY_NOW+timedelta(days=5)),
+ ("pdf_sha256","b"*64),("pdf_artifact_version","v2"))
+ if route=="idle" or field in {"pdf_generated_at","pdf_expires_at","pdf_artifact_version"}
+])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_every_verified_metadata_field_is_rechecked_at_commit(monkeypatch, field, new_value, route):
+    token, record, verified_snapshot = recovery_ready_purchase(generation_processing=route == "processing")
+    assert (
+        fs.can_finalize_idle_pdf_generation(record, token, now=RECOVERY_NOW)
+        if route == "idle"
+        else fs.can_finalize_interrupted_pdf_generation(record, token, now=RECOVERY_NOW)
+    )
+    record[field] = new_value
+    if route == "idle":
+        result, client = recovery_idle_consume(monkeypatch, record, token, verified_snapshot)
+    else:
+        result, client = _run_consume_only_recovery(monkeypatch, record, token, verified_snapshot)
+    assert result is False
+    assert client.transaction_ref.updates == []
+    assert record["used_flag"] is False
+
+
+@pytest.mark.parametrize("missing", [
+    "pdf_status", "pdf_object_path", "pdf_generated_at", "pdf_expires_at", "pdf_sha256", "pdf_artifact_version",
+])
+@pytest.mark.usefixtures("recovery_clock_and_collection")
+def test_idle_expected_snapshot_must_be_complete(monkeypatch, missing):
+    token, record, expected = recovery_ready_purchase()
+    expected.pop(missing)
+    result, client = recovery_idle_consume(monkeypatch, record, token, expected)
+    assert result is False
+    assert client.transaction_ref.updates == []

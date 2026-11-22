@@ -95,7 +95,7 @@ def test_purchase_recovery_state_precedes_irregular_guidance(monkeypatch, flag, 
 
 def test_unpaid_purchase_keeps_payment_waiting_message(monkeypatch):
     st_stub, calls = setup_main_route(monkeypatch, make_purchase(payment_status="pending"))
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *args: None)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *args, **kwargs: None)
     app.main()
     assert ("info", "決済結果を確認中です。数秒後に再読み込みしてください。") in st_stub.calls
     assert calls == []
@@ -112,7 +112,7 @@ def setup_error_reruns(monkeypatch):
     monkeypatch.setattr(app, "get_purchase_record", lambda purchase_id: None)
     monkeypatch.setattr(app, "cleanup_pending_checkout_token", lambda *a, **k: None)
     monkeypatch.setattr(app, "cleanup_self_resume_token", lambda *a, **k: None)
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *a: None)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *a, **k: None)
     monkeypatch.setattr(app, "render_irregular_access_guidance", lambda: calls.append(("guidance",)))
     for name in ("create_checkout_session", "update_purchase_record", "consume_purchase"):
         monkeypatch.setattr(app, name, lambda *a, **k: pytest.fail("Unexpected purchase write"))
@@ -298,8 +298,8 @@ def test_render_self_resume_notice_includes_copy_guidance_and_contact(monkeypatc
 
 def test_self_resume_valid_paid_unused_within_window_routes_to_form(monkeypatch):
     _, calls = setup_main_route(monkeypatch, make_purchase())
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: False)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: False)
 
     app.main()
 
@@ -309,8 +309,8 @@ def test_self_resume_valid_paid_unused_within_window_routes_to_form(monkeypatch)
 
 def test_self_resume_processing_routes_to_processing_without_form(monkeypatch):
     _, calls = setup_main_route(monkeypatch, make_purchase(generation_processing=True))
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: False)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: False)
 
     app.main()
 
@@ -326,8 +326,8 @@ def test_self_resume_expired_purchase_does_not_route_to_form(monkeypatch):
             token_expires_at=datetime.datetime(2025, 12, 27, tzinfo=datetime.timezone.utc),
         ),
     )
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: False)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: False)
 
     app.main()
 
@@ -459,8 +459,8 @@ def test_self_resume_missing_or_unusable_session_token_shows_recovery_state(
 def test_self_resume_missing_state_renders_recovery_guidance(monkeypatch):
     st_stub, calls = setup_main_route(monkeypatch, None)
     st_stub.session_state.purchase_token_missing = True
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: False)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: False)
 
     app.main()
 
@@ -764,8 +764,8 @@ def test_success_return_stale_session_storage_token_is_rejected(monkeypatch):
 
 def test_used_ready_pdf_routes_to_pdf_recovery(monkeypatch):
     _, calls = setup_main_route(monkeypatch, make_purchase(used_flag=True, pdf_status="ready"))
-    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger: None)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: calls.append(("pdf_recovery", purchase)) or True)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda purchase, logger, **kwargs: None)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: calls.append(("pdf_recovery", purchase)) or True)
 
     with pytest.raises(StopCalled):
         app.main()
@@ -779,12 +779,12 @@ def test_processing_ready_pdf_finalizes_before_processing_screen(monkeypatch):
     finalized_purchase = make_purchase(used_flag=True, generation_processing=False, pdf_status="ready")
     _, calls = setup_main_route(monkeypatch, active_purchase)
 
-    def finalize(purchase, logger):
+    def finalize(purchase, logger, **kwargs):
         calls.append(("finalize", purchase))
         return finalized_purchase
 
     monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", finalize)
-    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger: calls.append(("pdf_recovery", purchase)) or True)
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", lambda purchase, logger, **kwargs: calls.append(("pdf_recovery", purchase)) or True)
 
     with pytest.raises(StopCalled):
         app.main()
@@ -792,3 +792,50 @@ def test_processing_ready_pdf_finalizes_before_processing_screen(monkeypatch):
     assert any(call[0] == "finalize" for call in calls)
     assert any(call[0] == "pdf_recovery" for call in calls)
     assert not any(call[0] == "processing" for call in calls)
+
+
+@pytest.mark.parametrize("product_type", [app.PRODUCT_TYPE_REGULAR, app.PRODUCT_TYPE_REVIEW])
+@pytest.mark.parametrize("processing", [False, True, None])
+def test_ready_recovery_failure_never_routes_to_generation(monkeypatch, product_type, processing):
+    purchase = make_purchase(
+        product_type=product_type, generation_processing=processing, pdf_status="ready"
+    )
+    st_stub, calls = setup_main_route(monkeypatch, purchase)
+    monkeypatch.setattr(app, "finalize_idle_pdf_generation_if_ready", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "finalize_interrupted_pdf_generation_if_ready", lambda *args, **kwargs: None)
+
+    app.main()
+
+    assert not any(call[0] in {"regular_form", "review_form", "processing"} for call in calls)
+    assert any(call[0] == "warning" for call in st_stub.calls)
+
+
+@pytest.mark.parametrize("product_type", [app.PRODUCT_TYPE_REGULAR, app.PRODUCT_TYPE_REVIEW])
+def test_idle_ready_recovery_passes_verified_bytes_to_download(monkeypatch, product_type):
+    purchase = make_purchase(product_type=product_type, pdf_status="ready")
+    finalized = dict(purchase, used_flag=True)
+    _, calls = setup_main_route(monkeypatch, purchase)
+    verified = app.VerifiedRecoveryPdf(purchase["purchase_id"], {"pdf_status": "ready"}, b"verified-pdf")
+
+    def finalize_idle(record, logger, *, verified_pdf_out=None):
+        calls.append(("idle_finalize", record))
+        verified_pdf_out.append(verified)
+        return finalized
+
+    def render_pdf(record, logger, *, verified_pdf=None):
+        calls.append(("pdf_recovery", record, verified_pdf))
+        return True
+
+    monkeypatch.setattr(app, "finalize_idle_pdf_generation_if_ready", finalize_idle)
+    monkeypatch.setattr(
+        app, "finalize_interrupted_pdf_generation_if_ready",
+        lambda *args, **kwargs: pytest.fail("Idle recovery must not use T08"),
+    )
+    monkeypatch.setattr(app, "render_pdf_recovery_screen", render_pdf)
+
+    with pytest.raises(StopCalled):
+        app.main()
+
+    assert ("idle_finalize", purchase) in calls
+    assert ("pdf_recovery", finalized, verified) in calls
+    assert not any(call[0] in {"regular_form", "review_form"} for call in calls)
